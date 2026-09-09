@@ -1,0 +1,12 @@
+# Keep the build context small: it is copied into the image at /opt/app so the
+# self-test can be re-run, and nothing below belongs there.
+.git
+work/
+output/
+product.json
+config.json
+test/input/
+**/__pycache__/
+*.pyc
+*.sif
+*.tar

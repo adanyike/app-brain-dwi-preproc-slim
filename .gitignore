@@ -1,0 +1,10 @@
+# Runtime artefacts -- never committed
+config.json
+work/
+output/
+product.json
+test/input/
+*.pyc
+__pycache__/
+.singularity/
+*.sif

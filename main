@@ -1,0 +1,105 @@
+#!/bin/bash
+#PBS -N bl_brain_dwi_preproc_slim
+#PBS -l nodes=1:ppn=16:gpus=1
+#PBS -l vmem=48gb
+#PBS -l walltime=23:59:00
+
+# brainlife entrypoint.
+#
+# brainlife clones this repository into the task directory, writes config.json
+# next to it, and runs ./main.  Everything below just picks a container runtime
+# and hands over to run.sh, which does the actual work.
+#
+# Environment overrides:
+#   APP_IMAGE        container to run (default below).  Either a docker:// URI
+#                    or the path to a local .sif.  Must be built and pushed
+#                    before the app is registered.
+#   EXTRA_BIND       comma- or space-separated host paths to make visible inside
+#                    the container, for input data that lives outside the
+#                    working directory.
+#   SKIP_CONTAINER=1 run directly on the host (FSL/MRtrix3/ANTs must be on PATH)
+
+set -e
+set -x
+
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+export APP_DIR
+
+APP_IMAGE="${APP_IMAGE:-docker://nyeguh/brain-dwi-preproc-slim:1.0.0}"
+
+# eddy, ANTs and MRtrix3 all read their thread counts from the environment, and
+# a container runtime only forwards variables carrying its own prefix. Apptainer
+# (the continuation of Singularity, and what most clusters now run) reads
+# APPTAINERENV_ and still honours SINGULARITYENV_, but logs an INFO line for
+# every legacy-prefixed variable it sees. Setting both keeps genuine Singularity
+# working and keeps Apptainer quiet.
+NCORES="${OMP_NUM_THREADS:-$(nproc 2>/dev/null || echo 8)}"
+export OMP_NUM_THREADS="$NCORES"
+for prefix in SINGULARITYENV_ APPTAINERENV_; do
+    export "${prefix}OMP_NUM_THREADS=$NCORES"
+    export "${prefix}ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$NCORES"
+    export "${prefix}MRTRIX_NTHREADS=$NCORES"
+    export "${prefix}APP_DIR=$APP_DIR"
+done
+
+rm -rf output product.json
+mkdir -p output
+
+# The working directory and the app itself are always visible inside the
+# container.  Anything else -- input data on a different filesystem, say --
+# has to be named explicitly, or the container sees an empty path where the
+# NIfTI should be.
+SING_BIND=(-B "$PWD:$PWD" -B "$APP_DIR:$APP_DIR")
+DOCKER_BIND=(-v "$PWD:$PWD" -v "$APP_DIR:$APP_DIR")
+if [ -n "${EXTRA_BIND:-}" ]; then
+    read -r -a EXTRA_BIND_PATHS <<< "${EXTRA_BIND//,/ }"
+    for bind_path in "${EXTRA_BIND_PATHS[@]}"; do
+        [ -n "$bind_path" ] || continue
+        [ -e "$bind_path" ] || { echo "ERROR: EXTRA_BIND path does not exist: $bind_path" >&2; exit 1; }
+        SING_BIND+=(-B "$bind_path:$bind_path")
+        DOCKER_BIND+=(-v "$bind_path:$bind_path")
+    done
+fi
+
+if [ "${SKIP_CONTAINER:-0}" = "1" ]; then
+    echo "running on the host (SKIP_CONTAINER=1)"
+    "$APP_DIR/run.sh"
+elif command -v singularity >/dev/null 2>&1; then
+    # --nv exposes the host CUDA driver so eddy_cuda can run; it is harmless
+    # when there is no GPU, in which case run.sh falls back to a CPU eddy.
+    GPU_FLAG=""
+    if nvidia-smi -L >/dev/null 2>&1; then GPU_FLAG="--nv"; fi
+    # GPU_FLAG is empty or a flag word, so it must stay unquoted.
+    # shellcheck disable=SC2086
+    singularity exec $GPU_FLAG -e \
+        "${SING_BIND[@]}" --pwd "$PWD" \
+        "$APP_IMAGE" "$APP_DIR/run.sh"
+elif command -v docker >/dev/null 2>&1; then
+    case "$APP_IMAGE" in
+        *.sif|*.simg)
+            echo "ERROR: APP_IMAGE is a singularity image ($APP_IMAGE) but singularity is not installed." >&2
+            echo "       Install singularity/apptainer, or set APP_IMAGE to a docker:// image." >&2
+            exit 1 ;;
+    esac
+    GPU_FLAG=""
+    if nvidia-smi -L >/dev/null 2>&1; then GPU_FLAG="--gpus all"; fi
+    # shellcheck disable=SC2086
+    docker run --rm $GPU_FLAG \
+        "${DOCKER_BIND[@]}" -w "$PWD" \
+        -e OMP_NUM_THREADS="$NCORES" \
+        -e ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS="$NCORES" \
+        -e MRTRIX_NTHREADS="$NCORES" \
+        -e APP_DIR="$APP_DIR" \
+        -u "$(id -u):$(id -g)" \
+        "${APP_IMAGE#docker://}" "$APP_DIR/run.sh"
+else
+    echo "no singularity or docker found; falling back to the host toolchain" >&2
+    "$APP_DIR/run.sh"
+fi
+
+# brainlife treats a non-zero exit as a failed task.
+if [ ! -f output/tensor/fa.nii.gz ]; then
+    echo "ERROR: output/tensor/fa.nii.gz was not produced" >&2
+    exit 1
+fi
+echo "done"
