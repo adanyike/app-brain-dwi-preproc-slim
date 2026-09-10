@@ -22,6 +22,42 @@ BRAIN_MASK="$WORK_DIR/prep/topup_mask.nii.gz"
 
 BET_F="$(cfg bet_topup_f 0.4)"
 
+FLIRTSCH="$FSLDIR/etc/flirtsch"
+
+# topup_config_for <nifti> -- the topup config appropriate for this matrix size.
+#
+# topup requires the image size to be an integer multiple of every sub-sampling
+# level in its config, and FSL ships one config per level: b02b0_4.cnf needs
+# every dimension divisible by 4, b02b0_2.cnf (aliased as b02b0.cnf) by 2, and
+# b02b0_1.cnf does not sub-sample and so accepts any size.  Sub-sampling only
+# buys speed -- FSL states the results are very close to identical -- so take
+# the fastest config the data actually allows rather than making the caller
+# work it out, or defaulting to the slowest one for everybody.
+# https://fsl.fmrib.ox.ac.uk/fsl/docs/diffusion/topup/users_guide/index.html
+topup_config_for() {
+    local image="$1" d1 d2 d3 entry level name
+    d1="$(fslval "$image" dim1 | tr -d '[:space:]')"
+    d2="$(fslval "$image" dim2 | tr -d '[:space:]')"
+    d3="$(fslval "$image" dim3 | tr -d '[:space:]')"
+
+    # Fastest first.  Both spellings of the level-2 config are offered because
+    # releases before 6.0.5 shipped only b02b0.cnf; a size divisible by 4 is
+    # also divisible by 2, so stepping down the list is always safe.
+    for entry in 4:b02b0_4.cnf 2:b02b0_2.cnf 2:b02b0.cnf 1:b02b0_1.cnf; do
+        level="${entry%%:*}"; name="${entry#*:}"
+        [ $(( d1 % level )) -eq 0 ] && [ $(( d2 % level )) -eq 0 ] \
+            && [ $(( d3 % level )) -eq 0 ] || continue
+        # Only offer a file that is really there -- but when FSL's config
+        # directory is not visible at all, trust the canonical name rather than
+        # falling through to a config the data cannot use.
+        [ ! -d "$FLIRTSCH" ] || [ -f "$FLIRTSCH/$name" ] || continue
+        log "topup config: $name (${d1}x${d2}x${d3} divides by $level)"
+        printf '%s' "$name"
+        return 0
+    done
+    die "no topup config in $FLIRTSCH suits a ${d1}x${d2}x${d3} matrix; set 'topup_config' explicitly"
+}
+
 log "extracting b=0 volumes for topup"
 b0_files=()
 i=0
@@ -43,16 +79,16 @@ acq_rows="$(grep -c '[^[:space:]]' "$ACQPARAMS")"
     die "acqparams.txt has $acq_rows rows but $B0_MERGED has ${#b0_files[@]} volumes"
 
 if [ "$HAS_REVERSE_PE" = true ]; then
-    # b02b0_1.cnf is FSL's no-sub-sampling variant of b02b0.cnf.  Sub-sampling
-    # only buys speed -- FSL states the results are very close to identical --
-    # and it constrains the matrix to be a multiple of the sub-sampling level,
-    # which is what used to force a slice to be cropped off odd-slice data.
-    # Set topup_config to b02b0.cnf (or b02b0_4.cnf) for the faster schedules,
-    # but only when every dimension divides by 2 (or 4).
-    TOPUP_CONFIG="$(cfg topup_config b02b0_1.cnf)"
+    TOPUP_CONFIG="$(cfg_manual topup_config)"
+    if [ -z "$TOPUP_CONFIG" ]; then
+        TOPUP_CONFIG="$(topup_config_for "$B0_MERGED")"
+    else
+        log "topup config: $TOPUP_CONFIG (from config.json)"
+    fi
     # Estimate movement for the first two levels only, and use the
     # scaled-conjugate-gradient minimiser after that.  The entry counts here
-    # must match the number of levels in topup_config.
+    # must match the number of levels in topup_config; every b02b0* config
+    # FSL ships uses the same nine.
     TOPUP_EXTRA="$(cfg topup_extra '--estmov=1,1,0,0,0,0,0,0,0 --minmet=0,0,1,1,1,1,1,1,1')"
 
     log "running topup (config $TOPUP_CONFIG)"
@@ -84,6 +120,7 @@ mv "$WORK_DIR/prep/topup_mask_filled.nii.gz" "$BRAIN_MASK"
 cat >> "$WORK_DIR/state.sh" <<EOSTATE
 TOPUP_BASE="$TOPUP_BASE"
 TOPUP_APPLIED=$TOPUP_APPLIED
+TOPUP_CONFIG="$TOPUP_CONFIG"
 TOPUP_MEAN_B0="$MEAN_B0"
 BRAIN_MASK="$BRAIN_MASK"
 EOSTATE

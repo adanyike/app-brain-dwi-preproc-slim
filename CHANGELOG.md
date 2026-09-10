@@ -23,12 +23,16 @@ reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction.
   rather than assumed and a non-uniform grouping is an error instead of a
   silently wrong file. A reference Philips 84-slice specification ships in
   `templates/`.
-- Every acquired slice is kept, whatever the slice count. topup defaults to
-  `b02b0_1.cnf`, which does not sub-sample and so places no constraint on the
-  matrix size; sub-sampling affects only topup's speed, and `topup_config`
-  selects a faster schedule where the dimensions allow it. Cropping a slice to
-  make the count even is not done, following FSL's guidance that it destroys
-  the multiband structure `eddy` needs for slice-to-volume correction.
+- The topup configuration is chosen from the matrix size, since topup requires
+  the image size to be a multiple of each sub-sampling level in its config:
+  `b02b0_4.cnf` when every dimension divides by 4, `b02b0_2.cnf` when they
+  divide by 2, `b02b0_1.cnf` otherwise. Sub-sampling affects only speed, so
+  this takes the fastest schedule the data allows; an explicit `topup_config`
+  still wins, and the resolved value is recorded in `product.json`.
+- Every acquired slice is kept, whatever the slice count: an odd dimension
+  simply selects `b02b0_1.cnf`. Cropping a slice to make the count even is not
+  done, following FSL's guidance that it destroys the multiband structure
+  `eddy` needs for slice-to-volume correction.
 - `eddy` selects a CUDA build when one is installed, whatever it is called, and
   falls back to a CPU build — without slice-to-volume correction — when there is
   none. Which happened is recorded in the summary.

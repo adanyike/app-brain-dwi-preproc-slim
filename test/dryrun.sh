@@ -75,6 +75,10 @@ check "topup ran"                grep -q -- "--topup=" <<< "$(eddy_cmd)"
 check "no slice-to-volume on CPU" bash -c '! grep -q -- "--mporder" <<< "$(cat "'"$SCEN"'"/work/eddy/eddy_corrected.eddy_command_txt)"'
 check "50 ROIs x 4 metrics recorded" bash -c '
     [ "$(tail -n +2 "'"$SCEN"'/output/roistats/roi_stats.csv" | wc -l)" = "200" ]'
+check "topup config picked for a /4 matrix" \
+    grep -q "topup config: b02b0_4.cnf (32x32x12 divides by 4)" "$SCEN/log.txt"
+check "resolved config recorded in provenance" bash -c '
+    [ "$(jq -r .provenance.topup_config "'"$SCEN"'/product.json")" = "b02b0_4.cnf" ]'
 check "product.json is valid"    jq empty "$SCEN/product.json"
 
 # ---------------------------------------------------------------------------
@@ -104,6 +108,20 @@ check "slspec covers all 15 slices" bash -c '
 check "five excitations of three" bash -c '
     [ "$(grep -c "[^[:space:]]" "'"$SCEN"'/output/qc/slspec.txt")" = "5" ]'
 check "still slice-to-volume"   grep -q -- "--mporder=6" <<< "$(eddy_cmd)"
+check "odd matrix selects the unsubsampled config" \
+    grep -q "topup config: b02b0_1.cnf (32x32x15 divides by 1)" "$SCEN/log.txt"
+
+# ---------------------------------------------------------------------------
+# Even but not a multiple of 4, and an explicit override on the same data.
+scenario "3b-even-slices" "$BIN" '{"eddy_binary":"eddy_openmp"}' --slices 10 --multiband 2
+check "even matrix selects the /2 config" \
+    grep -q "topup config: b02b0_2.cnf (32x32x10 divides by 2)" "$SCEN/log.txt"
+
+scenario "3c-explicit-config" "$BIN" '{"eddy_binary":"eddy_openmp","topup_config":"b02b0.cnf"}' --slices 10 --multiband 2
+check "an explicit config wins" \
+    grep -q "topup config: b02b0.cnf (from config.json)" "$SCEN/log.txt"
+check "the explicit config reached topup" bash -c '
+    [ "$(jq -r .provenance.topup_config "'"$SCEN"'/product.json")" = "b02b0.cnf" ]'
 
 # ---------------------------------------------------------------------------
 printf '\n--- 4-no-reverse-pe ---\n'

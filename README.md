@@ -26,7 +26,7 @@ ICBM-DTI-81 atlas, in each subject's own diffusion space.
 All stages run as a single task. Quality-control output from `eddy_quad` and a
 summary with per-volume motion and per-ROI FA are produced alongside the results.
 
-Two details worth knowing, because they are derived rather than assumed:
+Three details worth knowing, because they are derived rather than assumed:
 
 * **The acquisition parameters are read from the sidecars.** Phase-encoding
   direction and total readout time are taken from `PhaseEncodingDirection` and
@@ -37,15 +37,20 @@ Two details worth knowing, because they are derived rather than assumed:
   `MosaicRefAcqTimes`). Slices are grouped by acquisition time, so the multiband
   factor is measured rather than assumed; a non-uniform grouping is reported as
   an error instead of producing a silently wrong file.
+* **The topup configuration is chosen from the matrix size.** topup requires the
+  image size to be a multiple of each sub-sampling level in its config, so the
+  app reads the dimensions and picks the fastest one they allow: `b02b0_4.cnf`
+  when every dimension divides by 4, `b02b0_2.cnf` when they divide by 2, and
+  `b02b0_1.cnf` otherwise. Sub-sampling only affects speed — FSL states the
+  results are very close to identical — and the resolved config is recorded in
+  `product.json`.
 
-Every acquired slice is kept, whatever the slice count. topup only constrains
-the matrix size when its config sub-samples, and the default `b02b0_1.cnf` does
-not, so there is no reason to crop or duplicate a slice to make the count even —
+Because of that last point, every acquired slice is kept whatever the slice
+count. There is no reason to crop or duplicate a slice to make the count even:
 [FSL withdrew that advice](https://fsl.fmrib.ox.ac.uk/fsl/docs/diffusion/topup/users_guide/index.html)
 because a cropped volume no longer carries the multiband structure `eddy` needs
-for slice-to-volume correction. Sub-sampling only affects topup's speed, not its
-result, so `topup_config` is the knob if you want the faster schedule and your
-dimensions allow it.
+for slice-to-volume correction, and an odd dimension simply selects
+`b02b0_1.cnf` instead.
 
 ## Inputs
 
@@ -99,7 +104,7 @@ Every parameter is optional.
 | `eddy_niter` / `eddy_fwhm` | `6` / `10,6,0,0,0,0` | Eddy iterations and per-iteration smoothing |
 | `require_gpu` | `false` | `true` fails when no GPU is visible; `false` falls back to a CPU eddy and skips slice-to-volume correction |
 | `biascorrect` | `ants` | B1 bias correction: `ants`, `fsl` or `none` |
-| `topup_config` | `b02b0_1.cnf` | FSL topup schedule. The default does not sub-sample, so any matrix size works; `b02b0.cnf` / `b02b0_4.cnf` are faster but need every dimension divisible by 2 / 4 |
+| `topup_config` | `auto` | FSL topup schedule, chosen from the matrix size: `b02b0_4.cnf`, `b02b0_2.cnf` or `b02b0_1.cnf` as the dimensions divide by 4, 2 or neither. Name one explicitly to override |
 | `atlas_registration` | `true` | Set false to stop after preprocessing and the tensor fit |
 | `atlas_interpolation` | `MultiLabel` | Interpolation used when warping atlas labels |
 | `template_fa` / `atlas` | FSL's JHU data | Override the FA template and label image the atlas stage uses |

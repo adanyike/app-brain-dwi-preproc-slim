@@ -20,7 +20,7 @@
   "b0_threshold": 50,
   "b0_per_pedir": 2,
   "reduce_b0_above": 8,
-  "topup_config": "b02b0_1.cnf",
+  "topup_config": "auto",
   "topup_extra": "--estmov=1,1,0,0,0,0,0,0,0 --minmet=0,0,1,1,1,1,1,1,1",
   "bet_topup_f": 0.4,
   "eddy_niter": 6,
