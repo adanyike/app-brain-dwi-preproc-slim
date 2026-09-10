@@ -180,6 +180,13 @@ RUN set -e; \
 COPY . /opt/app
 WORKDIR /opt/app
 
+# Stage 4 registers the JHU FA template to each subject's FA, and the template
+# it must use is the app's own copy, not the one FSL ships -- prune-fsl.sh
+# deletes FSL's. Installing it beside the label image keeps the registration
+# target and the labels being warped in one place, on one grid.
+RUN install -D -m 0644 /opt/app/templates/JHU-ICBM-FA-1mm.nii.gz \
+        "${FSLDIR}/data/atlases/JHU/JHU-ICBM-FA-1mm.nii.gz"
+
 # Nothing below this line: if the trimming broke anything, the build stops here
 # rather than in somebody's job.
 RUN bash docker/selftest.sh && du -sh /opt/fsl /opt/ants /opt/mrtrix3

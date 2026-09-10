@@ -50,16 +50,19 @@ reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction.
 
 ### The atlas
 
-- The FA template and label image are read from FSL's own installation
-  (`$FSLDIR/data/atlases/JHU`) rather than carried in this repository;
-  `template_fa` and `atlas` override them.
+- Both atlas images are read from `$FSLDIR/data/atlases/JHU`. The label image is
+  FSL's own; the FA template is the repository's copy, which the container
+  installs there in place of FSL's, so the registration target does not vary
+  with the FSL release. `template_fa` and `atlas` override either.
 - All 50 JHU ICBM-DTI-81 regions are reported. FSL's label list omitted the
   inferior fronto-occipital fasciculus before 6.0.5, and a 48-entry list read
   against the 50-label image reports every region from 45 upwards under the
   wrong name.
 - `docker/selftest.sh` fails the build when `templates/JHU-ICBM-labels.json`,
   FSL's `JHU-labels.xml` and the label image do not agree on how many regions
-  there are.
+  there are, when the installed FA template is not byte-identical to the
+  repository's, or when the template and the label image do not share a grid —
+  the transform is estimated from one and applied to the other.
 
 ### The container
 
@@ -71,9 +74,9 @@ reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction.
   never touches: FSLeyes and the Qt6/VTK/Mesa stack beneath it, the conda C/C++
   toolchain and LLVM/clang libraries, OpenVINO, FIRST models, standard-space and
   Oxford-MM data, POSSUM, XTRACT, FIX macaque masks, sources, headers, docs,
-  conda cache and metadata, and every atlas but the JHU files stage 4 reads.
-  matplotlib and pandas are deliberately kept: `eddy_quad` renders its report
-  with matplotlib.
+  conda cache and metadata, and every atlas but the JHU label image and label
+  list stage 4 reads. matplotlib and pandas are deliberately kept: `eddy_quad`
+  renders its report with matplotlib.
 - `docker/collect-binaries.sh` — copies named programs plus, via `ldd`, exactly
   the libraries they need from inside their own prefix. A binary that is not
   found fails the build. Applied to ANTs only: 2.6 GB to 135 MB. MRtrix3 is

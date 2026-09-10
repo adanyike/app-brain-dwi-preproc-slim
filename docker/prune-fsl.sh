@@ -34,10 +34,11 @@ echo "prune-fsl: starting at ${before:-?} MB"
 # Conda package cache: tarballs already unpacked into the environment.
 drop "conda package cache" "$FSLDIR/pkgs"
 
-# Reference data. Stage 4 registers to FSL's own JHU ICBM-DTI-81 FA template and
-# warps its label image, so those two files and the label list beside them are
-# kept; every other atlas goes.
-KEEP_ATLAS_FILES="JHU/JHU-ICBM-FA-1mm.nii.gz JHU/JHU-ICBM-labels-1mm.nii.gz JHU-labels.xml"
+# Reference data. Stage 4 warps FSL's JHU ICBM-DTI-81 label image, so that file
+# and the label list beside it are kept; every other atlas goes, including FSL's
+# own FA template -- the Dockerfile installs the app's copy from templates/ in
+# its place, so the registration target is the same image on every run.
+KEEP_ATLAS_FILES="JHU/JHU-ICBM-labels-1mm.nii.gz JHU-labels.xml"
 keep_jhu() {
     local atlases="$FSLDIR/data/atlases" kept="$FSLDIR/data/atlases.keep" rel
     [ -d "$atlases" ] || return 0
@@ -46,7 +47,7 @@ keep_jhu() {
         mkdir -p "$kept/$(dirname "$rel")"
         cp -p "$atlases/$rel" "$kept/$rel"
     done
-    drop "atlases (JHU FA, labels and label list kept)" "$atlases"
+    drop "atlases (JHU labels and label list kept)" "$atlases"
     mv "$kept" "$atlases"
     for rel in $KEEP_ATLAS_FILES; do printf '  + kept %s\n' "data/atlases/$rel"; done
 }

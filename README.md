@@ -151,12 +151,15 @@ Provided by the container:
 | MRtrix3 | 3.0.8 |
 | ANTs | 2.6.5 |
 
-The atlas stage reads FSL's own copy of the JHU ICBM-DTI-81 data
-(`$FSLDIR/data/atlases/JHU`), so nothing is duplicated in this repository. The
-ROI names and abbreviations that go into the tables live in
-`templates/JHU-ICBM-labels.json`; FSL listed 48 of the 50 regions before 6.0.5,
-and the container's self-test refuses to build an image whose label list and
-label image disagree.
+The atlas stage reads both images from `$FSLDIR/data/atlases/JHU`. The label
+image is FSL's; the FA template is this repository's
+`templates/JHU-ICBM-FA-1mm.nii.gz`, which the container installs there in place
+of FSL's so that every run registers to the same image. The ROI names and
+abbreviations that go into the tables live in `templates/JHU-ICBM-labels.json`;
+FSL listed 48 of the 50 regions before 6.0.5. The self-test refuses to build an
+image whose label list and label image disagree on how many regions there are,
+whose installed template is not the repository's, or whose template and label
+image do not share a grid.
 
 ## Citing
 
@@ -217,6 +220,5 @@ If you use this app, please cite brainlife.io and the methods it runs.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). The JHU ICBM-DTI-81 FA template and label atlas
-are read from the FSL installation inside the container and are distributed with
-FSL under the FSL licence for non-commercial research use.
+MIT — see [LICENSE](LICENSE). The JHU ICBM-DTI-81 FA template and label atlas are
+distributed with FSL under the FSL licence for non-commercial research use.

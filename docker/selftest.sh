@@ -101,20 +101,48 @@ for cnf in b02b0_1.cnf b02b0.cnf; do
     check_file "topup $cnf config" "${FSLDIR:-/opt/fsl}/etc/flirtsch/$cnf"
 done
 
-# Stage 4 registers to FSL's JHU ICBM-DTI-81 data, and the prune deletes every
-# other atlas -- so check that these three came through it.
+# Stage 4 registers to the JHU ICBM-DTI-81 data under $FSLDIR: the label image
+# and label list survive the prune, and the FA template is the app's own copy,
+# installed there by the Dockerfile after FSL's was pruned.
 echo "JHU atlas"
 FSL_ATLASES="${FSLDIR:-/opt/fsl}/data/atlases"
+APP_DIR_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 check_file "JHU FA template"  "$FSL_ATLASES/JHU/JHU-ICBM-FA-1mm.nii.gz"
 check_file "JHU label image"  "$FSL_ATLASES/JHU/JHU-ICBM-labels-1mm.nii.gz"
 check_file "JHU label list"   "$FSL_ATLASES/JHU-labels.xml"
+
+# The installed template must be the app's, byte for byte.  If FSL's own copy
+# were still there the registration would silently target a different image.
+CHECKED=$((CHECKED + 1))
+if cmp -s "$APP_DIR_SELF/templates/JHU-ICBM-FA-1mm.nii.gz" \
+          "$FSL_ATLASES/JHU/JHU-ICBM-FA-1mm.nii.gz"; then
+    pass "installed FA template is the app's copy"
+else
+    fail "installed FA template" \
+         "$FSL_ATLASES/JHU/JHU-ICBM-FA-1mm.nii.gz differs from templates/JHU-ICBM-FA-1mm.nii.gz"
+fi
+
+# The transform is estimated from the FA template and then applied to the label
+# image, so the two have to sit on the same grid.  They come from different
+# places now, which is exactly when that stops being guaranteed.
+CHECKED=$((CHECKED + 1))
+grid_fa=""; grid_lab=""
+for key in dim1 dim2 dim3 pixdim1 pixdim2 pixdim3 qform_xorient qform_yorient qform_zorient; do
+    grid_fa="$grid_fa $(fslval "$FSL_ATLASES/JHU/JHU-ICBM-FA-1mm.nii.gz" "$key" 2>/dev/null | tr -d '[:space:]')"
+    grid_lab="$grid_lab $(fslval "$FSL_ATLASES/JHU/JHU-ICBM-labels-1mm.nii.gz" "$key" 2>/dev/null | tr -d '[:space:]')"
+done
+if [ -n "$(tr -d '[:space:]' <<< "$grid_fa")" ] && [ "$grid_fa" = "$grid_lab" ]; then
+    pass "FA template and label image share a grid ($(tr -s ' ' <<< "$grid_fa" | cut -d' ' -f2-4 | tr ' ' 'x'))"
+else
+    fail "FA/label grid" "template is [$grid_fa ] but the label image is [$grid_lab ]"
+fi
 
 # The app's own label metadata drives every ROI table, so it has to agree with
 # the label image it is read against.  FSL listed 48 regions before 6.0.5 and 50
 # from 6.0.5 on; a mismatch here means every ROI past the divergence is reported
 # under the wrong name.
 CHECKED=$((CHECKED + 1))
-APP_LABELS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/templates/JHU-ICBM-labels.json"
+APP_LABELS="$APP_DIR_SELF/templates/JHU-ICBM-labels.json"
 if [ ! -f "$APP_LABELS" ] || [ ! -f "$FSL_ATLASES/JHU-labels.xml" ]; then
     fail "JHU label metadata" "cannot compare: $APP_LABELS or the FSL label list is missing"
 else

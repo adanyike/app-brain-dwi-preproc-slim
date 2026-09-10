@@ -6,8 +6,9 @@
 # *fixed*, so the atlas labels only ever have to be pushed through one composite
 # transform and the subject's data is never resampled.
 #
-# The template and the label image are FSL's own, read from
-# $FSLDIR/data/atlases/JHU; template_fa and atlas override them.
+# Both images are read from $FSLDIR/data/atlases/JHU: the label image is FSL's,
+# and the FA template is the app's own copy from templates/, which the container
+# installs there in place of FSL's. template_fa and atlas override either.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 source "$WORK_DIR/state.sh"
