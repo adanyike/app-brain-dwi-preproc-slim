@@ -11,9 +11,7 @@ Given the forward-phase-encoded DWI series (and, optionally, its reverse-phase
   topup_b0s.txt   0-based volume indices of the b=0 images selected for topup
   prep.json       everything the shell stages need to know
 
-The original MATLAB pipeline read pre-existing ``.acqparams``/``.index`` files
-and then rewrote them with a study-specific heuristic.  Here they are built
-directly from the BIDS sidecars (``PhaseEncodingDirection`` and
+Everything is derived from the BIDS sidecars (``PhaseEncodingDirection`` and
 ``TotalReadoutTime``), which is what brainlife uploads alongside the NIfTI, so
 no hand-made bookkeeping file has to travel with the data.
 """
@@ -247,9 +245,9 @@ def select_topup_b0s(bvals: Sequence[float], series_of_volume: Sequence[int],
                      reduce_above: int) -> List[int]:
     """Choose which b=0 volumes go into ``topup --imain``.
 
-    Mirrors the intent of the original MATLAB block: use every b=0 when there
-    are only a handful, otherwise thin them down to a small balanced set spread
-    across the acquisition so topup stays fast and well conditioned.
+    Use every b=0 when there are only a handful, otherwise thin them down to a
+    small balanced set spread across the acquisition, so topup stays fast and
+    well conditioned.
     """
     b0s = [i for i, b in enumerate(bvals) if b <= b0_threshold]
     if not b0s:

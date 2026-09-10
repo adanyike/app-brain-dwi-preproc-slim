@@ -23,19 +23,31 @@ def save(path, array, voxel_size=2.0):
 
 
 class TestShippedLabelFile(unittest.TestCase):
-    def test_has_48_unique_contiguous_labels(self):
+    """The label list has to match the image it is read against.
+
+    FSL's JHU-ICBM-DTI-81 label image runs 1..50; releases before 6.0.5 listed
+    only 48 of them, omitting the inferior fronto-occipital fasciculus, which
+    left every ROI from 45 upwards reported under the name of another tract.
+    """
+
+    def test_has_50_unique_contiguous_labels(self):
         labels = rs.load_labels(SHIPPED_LABELS)
-        self.assertEqual(len(labels), 48)
-        self.assertEqual([l["index"] for l in labels], list(range(1, 49)))
-        self.assertEqual(len({l["abbreviation"] for l in labels}), 48)
-        self.assertEqual(len({l["name"] for l in labels}), 48)
+        self.assertEqual(len(labels), 50)
+        self.assertEqual([l["index"] for l in labels], list(range(1, 51)))
+        self.assertEqual(len({l["abbreviation"] for l in labels}), 50)
+        self.assertEqual(len({l["name"] for l in labels}), 50)
+
+    def test_n_labels_matches_the_list(self):
+        with open(SHIPPED_LABELS) as fh:
+            meta = json.load(fh)
+        self.assertEqual(meta["n_labels"], len(meta["labels"]))
 
     def test_hemispheres_are_paired(self):
         labels = rs.load_labels(SHIPPED_LABELS)
         left = sum(1 for l in labels if l["hemisphere"] == "left")
         right = sum(1 for l in labels if l["hemisphere"] == "right")
         self.assertEqual(left, right)
-        self.assertEqual(left, 21)
+        self.assertEqual(left, 22)
 
 
 class TestRoiStats(unittest.TestCase):

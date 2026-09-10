@@ -33,7 +33,7 @@ run "package.json is valid JSON" jq empty package.json
 run "atlas label metadata is valid JSON" jq empty templates/JHU-ICBM-labels.json
 run "entrypoints are executable" bash -c '[ -x main ] && [ -x run.sh ]'
 run "templates are present" bash -c '
-    for f in JHU-ICBM-FA-1mm.nii.gz JHU-ICBM-labels-1mm.nii.gz JHU-ICBM-labels.json; do
+    for f in JHU-ICBM-labels.json philips_84_slices_slspec.txt; do
         [ -s "templates/$f" ] || { echo "missing templates/$f"; exit 1; }
     done'
 

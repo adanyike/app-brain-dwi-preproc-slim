@@ -2,10 +2,9 @@
 # Stage 2 -- eddy current, motion and (where possible) slice-to-volume
 # correction, applying the topup field at the same time.
 #
-# Slice-to-volume correction (--mporder) is CUDA-only.  When a CUDA build of
-# eddy is available the stage uses the outlier/movement settings from the
-# original pipeline; otherwise it degrades to volume-to-volume correction and
-# says so loudly rather than failing.
+# Slice-to-volume correction (--mporder) is CUDA-only.  Without a CUDA build of
+# eddy the stage degrades to volume-to-volume correction and says so loudly
+# rather than failing.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 source "$WORK_DIR/state.sh"

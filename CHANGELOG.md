@@ -1,123 +1,92 @@
 # Changelog
 
-## 1.0.0 (slim)
+## 1.0.0
 
-Slim packaging of `app-brain-dwi-preproc`. The pipeline, its pinned tool
-versions and its outputs are identical to the full app; only the container
-build differs.
+First release: a containerised brainlife app for brain DWI preprocessing with
+reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction.
+
+### The pipeline
+
+- Seven stages driven by `run.sh`, resumable with `--from` / `--only`.
+- `acqparams`, `index` and the merged gradient table are derived from the BIDS
+  sidecars. `pe_dir`, `rpe_dir`, `readout_time` and `rreadout_time` default to
+  `auto` and are resolved per series, falling back through
+  `EffectiveEchoSpacing`, the Siemens CSA pair and `dcm2niix`'s `Estimated*`
+  names; an explicit value always wins, which is what Philips data needs. The
+  source used for each is reported on stderr and in `prep.json`.
+- Sidecar fields are found at any depth, so a raw DICOM parameter dump — which
+  nests them under `global.const` / `time.samples` and repeats each one per
+  volume — works as well as a flat BIDS sidecar. Rows that genuinely disagree
+  are refused rather than guessed at.
+- `slspec` is derived from `SliceTiming` (or Siemens `MosaicRefAcqTimes`) by
+  grouping slices on acquisition time, so the multiband factor is measured
+  rather than assumed and a non-uniform grouping is an error instead of a
+  silently wrong file. A reference Philips 84-slice specification ships in
+  `templates/`.
+- `eddy` selects a CUDA build when one is installed, whatever it is called, and
+  falls back to a CPU build — without slice-to-volume correction — when there is
+  none. Which happened is recorded in the summary.
+- The shell to fit is detected from the bvals, so `dtifit_shell` accepts `all`,
+  `lowest`, `highest` or an explicit b-value instead of a hard-coded literal.
+  Naming a shell the data does not contain is refused up front, and the resolved
+  b-value appears in the provenance.
+- Westin CL/CP/CS maps and `--save_tensor`, completing brainlife's
+  `neuro/tensor` datatype.
+- The JHU ICBM-DTI-81 atlas is warped into each subject's native diffusion space
+  with `MultiLabel` interpolation, and per-ROI statistics are written with voxel
+  counts and dispersion, in both tidy and wide CSV layouts.
+- `eddy_quad` QC, motion plots and a `product.json` summary.
+- Tool versions: FSL 6.0.7.23, MRtrix3 3.0.8, ANTs 2.6.5.
+
+### The atlas
+
+- The FA template and label image are read from FSL's own installation
+  (`$FSLDIR/data/atlases/JHU`) rather than carried in this repository;
+  `template_fa` and `atlas` override them.
+- All 50 JHU ICBM-DTI-81 regions are reported. FSL's label list omitted the
+  inferior fronto-occipital fasciculus before 6.0.5, and a 48-entry list read
+  against the 50-label image reports every region from 45 upwards under the
+  wrong name.
+- `docker/selftest.sh` fails the build when `templates/JHU-ICBM-labels.json`,
+  FSL's `JHU-labels.xml` and the label image do not agree on how many regions
+  there are.
+
+### The container
 
 - Two-stage build: the builder installs the full toolchain, then FSL is pruned
   and the ANTs and MRtrix3 programs this app runs are collected with their
   libraries. The runtime stage copies only those trees, so removed bytes never
   exist in a lower layer.
-- `docker/prune-fsl.sh` — a documented blacklist of FSL subsystems this
-  pipeline never touches: FSLeyes and the Qt6/VTK/Mesa stack beneath it, the
-  conda C/C++ toolchain and LLVM/clang libraries the environment carries as
-  build dependencies, OpenVINO, atlases, FIRST models, standard-space and
+- `docker/prune-fsl.sh` — a documented blacklist of FSL subsystems this pipeline
+  never touches: FSLeyes and the Qt6/VTK/Mesa stack beneath it, the conda C/C++
+  toolchain and LLVM/clang libraries, OpenVINO, FIRST models, standard-space and
   Oxford-MM data, POSSUM, XTRACT, FIX macaque masks, sources, headers, docs,
-  conda cache and metadata. matplotlib and pandas are deliberately kept:
-  `eddy_quad` renders its report with matplotlib.
+  conda cache and metadata, and every atlas but the JHU files stage 4 reads.
+  matplotlib and pandas are deliberately kept: `eddy_quad` renders its report
+  with matplotlib.
 - `docker/collect-binaries.sh` — copies named programs plus, via `ldd`, exactly
   the libraries they need from inside their own prefix. A binary that is not
   found fails the build. Applied to ANTs only: 2.6 GB to 135 MB. MRtrix3 is
   copied whole, since trimming it saved 72 MB against the risk of a missing
   binary appearing only at run time.
 - `docker/selftest.sh` — the final build step. CUDA binaries are checked by
-  linkage rather than execution: CUDA base images deliberately omit
-  `libcuda.so.1` (the container runtime injects it at `--gpus` / `--nv` time),
-  so `eddy_cuda` cannot run during `docker build` and exits 127 with a loader
-  error that says nothing about packaging. Everything else is executed and
-  fails on a missing executable or a dynamic-linker error, which is what
-  over-pruning actually produces; `command -v` cannot detect either. Also
-  verifies topup's `b02b0.cnf` and a NIfTI round trip through FSL and MRtrix3.
-- `test/test_parity.sh` — asserts every shared file is byte-identical to the
-  full app, so the two cannot drift apart.
-- A `/usr/local/bin/python -> python3` fallback symlink. MRtrix3's python
-  drivers use `#!/usr/bin/env python` and Ubuntu 22.04 provides no `python`;
-  FSL's bundled interpreter supplies one and still takes precedence, so this
-  only matters if that interpreter is ever pruned or leaves the front of PATH.
-
-The notes below describe the pipeline itself and apply to both apps.
-
-## 1.0.0
-
-First release. Ports the MATLAB-driven cluster pipeline
-(`preproc_AP_PA_longitudinal_2019.m`, brain branch) to a containerised
-brainlife app.
-
-Added
-- Seven-stage pipeline driven by `run.sh`, resumable with `--from` / `--only`.
-- `acqparams`, `index` and the merged gradient table derived from BIDS sidecars.
-- `slspec` derived from `SliceTiming`, verified against the reference Philips
-  84-slice specification.
-- Automatic eddy binary selection with a CPU fallback when no GPU is visible.
-- Shell detection from the bvals, so `dtifit_shell` accepts `all`, `lowest`,
-  `highest` or an explicit b-value instead of a hard-coded per-study literal.
-  Naming a shell the data does not contain is refused up front, and the
-  resolved b-value is what appears in the provenance.
-- `eddy_quad` QC, motion plots and a `product.json` summary.
-- Westin CL/CP/CS maps and `--save_tensor`, completing brainlife's
-  `neuro/tensor` datatype.
-- Per-ROI statistics with voxel counts and dispersion, in both tidy and legacy
-  wide CSV layouts.
-- `EXTRA_BIND` for local runs, so input data outside the working directory is
-  visible inside the container; a `.sif` requested without singularity now gives
-  a clear error instead of being handed to docker.
-- Unit tests, static checks and a synthetic end-to-end smoke test.
-
-Added
-- `pe_dir`, `rpe_dir`, `readout_time` and `rreadout_time` default to `auto` and
-  are derived per series, so a study does not need a hand-entered acqparams
-  value per subject. The phase-encoding direction falls back to the Siemens CSA
-  pair (`InPlanePhaseEncodingDirection` for the axis,
-  `CsaImage.PhaseEncodingDirectionPositive` for the sign) when there is no
-  `PhaseEncodingDirection`; the readout time falls back to
-  1/`BandwidthPerPixelPhaseEncode` and then to `dcm2niix`'s `Estimated*` names.
-  An explicit value still wins, which is what Philips data needs. Each run
-  reports the source of both values per series, on stderr and in `prep.json`,
-  and warns when the two series resolve their readout time through different
-  fields.
-
-Fixed
-- Sidecar fields were only read from the top level of the JSON, so a raw DICOM
-  parameter dump — which nests them under `global.const` / `time.samples` and
-  repeats each one per volume — looked empty. `SliceTiming`,
-  `CsaImage.MosaicRefAcqTimes`, `PhaseEncodingDirection`, `TotalReadoutTime`,
-  `EffectiveEchoSpacing` and `ReconMatrixPE` are now found at any depth, and a
-  per-volume repetition collapses to the one row the series has (see
-  `python/sidecar.py`). Rows that genuinely disagree are refused rather than
-  guessed at. The visible symptom was slice-to-volume correction being disabled
-  on a dump that did carry the timings.
-- The "no PhaseEncodingDirection in the sidecar" error told you to set
-  `dwi_pe_dir`/`rdwi_pe_dir`, keys `00_prepare.sh` never reads. It now names
-  the real ones, `pe_dir`/`rpe_dir` (likewise `readout_time`/`rreadout_time`),
-  and all four are documented in the README's parameter table.
-- `find_eddy` matched a hardcoded list of CUDA eddy names that omitted
-  `eddy_cuda11.0`, the name FSL 6.0.7.18 and 6.0.7.19 ship. On those releases
-  the search fell through to `eddy_openmp` and slice-to-volume correction was
-  silently skipped. It now discovers whatever `eddy_cuda*` is installed,
-  preferring the unsuffixed modern name and otherwise the highest version.
-
-Fixed relative to the original scripts
-- b=0 volumes are merged in a defined order rather than by a `bzero*` glob,
-  which misordered ten or more volumes against `acqparams`.
-- The post-eddy brain mask is hole-filled; the original `fslmaths -fillh` was
-  appended to a command buffer that was never executed.
-
-Changed
-- MRtrix3 pinned to 3.0.8 (was 3.0.4), ANTs to 2.6.5 (was 2.5.3) and FSL to
-  6.0.7.23 (was 6.0.7.16), all current releases. The ANTs unpack no longer
-  assumes the archive's top-level directory is named after the version.
-- The container build globs for an `eddy_cuda*` binary and now *fails* when
-  there is none, rather than listing the eddy binaries and ignoring the result.
-  FSL 6.0.7.20 shipped without `eddy_cuda`; an image built on it would fall
-  back to CPU eddy and silently skip slice-to-volume correction. Build with
+  linkage rather than execution, because CUDA base images omit `libcuda.so.1`
+  and the container runtime injects it at `--gpus` / `--nv` time. Everything
+  else is executed and fails on a missing executable or a dynamic-linker error,
+  which is what over-pruning actually produces and what `command -v` cannot
+  detect. Also verifies topup's `b02b0.cnf`, the JHU atlas files, and a NIfTI
+  round trip through FSL and MRtrix3.
+- The build fails when the FSL release ships no `eddy_cuda` binary, rather than
+  producing an image that silently skips slice-to-volume correction. Build with
   `--build-arg REQUIRE_CUDA_EDDY=0` for a deliberately CPU-only image.
-- The atlas is warped with `MultiLabel` interpolation instead of ANTs' linear
-  default; set `atlas_interpolation: "Linear"` for the legacy behaviour.
+- A `/usr/local/bin/python -> python3` fallback symlink, since MRtrix3's python
+  drivers use `#!/usr/bin/env python` and Ubuntu 22.04 provides no `python`.
 
-Removed
-- The final 1 mm isotropic upsampling of the DWI and its brain mask, along with
-  the `upscale`, `vox_size` and `upscale_mask_threshold` settings. It produced a
-  large interpolated volume that nothing downstream consumed, and `mrresize`,
-  the command that performed it, no longer exists in MRtrix3.
+### Running it
+
+- `main` selects Singularity, Docker or a local toolchain and passes a GPU
+  through when one is present. `EXTRA_BIND` makes input data outside the working
+  directory visible inside the container, and a `.sif` requested without
+  singularity gives a clear error instead of being handed to docker.
+- Unit tests, static checks, a dry run of every stage against a stub toolchain,
+  and a synthetic end-to-end smoke test.

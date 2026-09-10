@@ -57,8 +57,8 @@ log "merged series: $NVOL_TOTAL volumes"
 
 # --------------------------------------------------- odd slice handling ----
 # topup's default subsampling schedule halves the matrix, so an odd slice count
-# makes it fail.  The original pipeline cropped one slice off and told eddy
-# about the resulting slice-order shift via --mb/--mb_offs.
+# makes it fail.  One slice is cropped off and eddy is told about the resulting
+# slice-order shift via --mb/--mb_offs.
 DROP_ODD_SLICE="$(cfg_bool remove_odd_slice true)"
 REMOVE_BOTTOM="$(cfg_bool remove_bottom_slice true)"
 SLICE_DROPPED=none

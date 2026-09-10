@@ -9,7 +9,7 @@ followed by diffusion tensor fitting and white-matter ROI extraction.
 The app corrects susceptibility distortion from an opposing phase-encode pair,
 corrects eddy currents and subject motion — including **within-volume
 (slice-to-volume) motion** where a GPU is available — fits the diffusion tensor,
-and reports mean FA, MD, AD and RD in the 48 white-matter regions of the JHU
+and reports mean FA, MD, AD and RD in the 50 white-matter regions of the JHU
 ICBM-DTI-81 atlas, in each subject's own diffusion space.
 
 ## What it does
@@ -21,7 +21,7 @@ ICBM-DTI-81 atlas, in each subject's own diffusion space.
 | 2 | Eddy-current, motion and slice-to-volume correction with outlier replacement, applying the field | FSL `eddy_cuda` |
 | 3 | B1 bias-field correction; detect the b-value shells and fit the tensor to one; derive RD, AD, colour FA and Westin shape measures | MRtrix3, ANTs, FSL `dtifit` |
 | 4 | Register the JHU FA template to each subject's FA and warp the atlas labels into native space | ANTs |
-| 5 | Mean, SD and median of each metric in each of the 48 ROIs | — |
+| 5 | Mean, SD and median of each metric in each of the 50 ROIs | — |
 
 All stages run as a single task. Quality-control output from `eddy_quad` and a
 summary with per-volume motion and per-ROI FA are produced alongside the results.
@@ -79,8 +79,7 @@ one column per ROI.
 
 ## Configuration
 
-Every parameter is optional; the defaults are the values used in the pipeline
-this app was built from.
+Every parameter is optional.
 
 | Parameter | Default | Meaning |
 |---|---|---|
@@ -93,6 +92,8 @@ this app was built from.
 | `biascorrect` | `ants` | B1 bias correction: `ants`, `fsl` or `none` |
 | `atlas_registration` | `true` | Set false to stop after preprocessing and the tensor fit |
 | `atlas_interpolation` | `MultiLabel` | Interpolation used when warping atlas labels |
+| `template_fa` / `atlas` | FSL's JHU data | Override the FA template and label image the atlas stage uses |
+| `atlas_labels` | `templates/JHU-ICBM-labels.json` | ROI names and abbreviations for the label image |
 | `roi_metrics` | `FA, MD, AD, RD` | Metrics to summarise per ROI |
 | `subject` / `session` | from input metadata | Labels written into the results |
 | `nthreads` | all cores | Threads for MRtrix3, ANTs and OpenMP |
@@ -134,6 +135,13 @@ Provided by the container:
 | FSL | 6.0.7.23 |
 | MRtrix3 | 3.0.8 |
 | ANTs | 2.6.5 |
+
+The atlas stage reads FSL's own copy of the JHU ICBM-DTI-81 data
+(`$FSLDIR/data/atlases/JHU`), so nothing is duplicated in this repository. The
+ROI names and abbreviations that go into the tables live in
+`templates/JHU-ICBM-labels.json`; FSL listed 48 of the 50 regions before 6.0.5,
+and the container's self-test refuses to build an image whose label list and
+label image disagree.
 
 ## Citing
 
@@ -194,6 +202,6 @@ If you use this app, please cite brainlife.io and the methods it runs.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). The bundled JHU ICBM-DTI-81 FA template and label
-atlas are distributed with FSL under the FSL licence for non-commercial research
-use.
+MIT — see [LICENSE](LICENSE). The JHU ICBM-DTI-81 FA template and label atlas
+are read from the FSL installation inside the container and are distributed with
+FSL under the FSL licence for non-commercial research use.

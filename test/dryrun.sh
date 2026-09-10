@@ -26,19 +26,29 @@ check() {  # check <description> <condition-command...>
     else FAIL=$((FAIL + 1)); note "FAIL -- $1"; fi
 }
 
+# base_config <input dir> [extra jq object] -- the config every scenario that
+# runs to completion starts from.  Stage 4 normally reads FSL's JHU data, and
+# the stub toolchain has no FSL, so the dry run points it at the synthetic
+# template and label image make_test_data.py writes alongside the series.
+base_config() {
+    jq -n --arg d "$1" --argjson o "${2:-{\}}" '{
+        dwi:($d+"/dwi/dwi.nii.gz"), bvals:($d+"/dwi/dwi.bvals"),
+        bvecs:($d+"/dwi/dwi.bvecs"), dwi_json:($d+"/dwi/dwi.json"),
+        rdwi:($d+"/rdwi/dwi.nii.gz"), rbvals:($d+"/rdwi/dwi.bvals"),
+        rbvecs:($d+"/rdwi/dwi.bvecs"), rdwi_json:($d+"/rdwi/dwi.json"),
+        template_fa:($d+"/atlas/template_fa.nii.gz"),
+        atlas:($d+"/atlas/atlas_labels.nii.gz"),
+        subject:"sub-dry", nthreads:2, eddy_niter:2, eddy_fwhm:"10,0"
+    } * $o'
+}
+
 # scenario <name> <bindir> <extra jq object> [make_test_data args...]
 scenario() {
     local name="$1" bindir="$2" overrides="$3"; shift 3
     SCEN="$ROOT/$name"
     mkdir -p "$SCEN"
     python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" "$@" >/dev/null
-    jq -n --arg d "$SCEN/input" --argjson o "$overrides" '{
-        dwi:($d+"/dwi/dwi.nii.gz"), bvals:($d+"/dwi/dwi.bvals"),
-        bvecs:($d+"/dwi/dwi.bvecs"), dwi_json:($d+"/dwi/dwi.json"),
-        rdwi:($d+"/rdwi/dwi.nii.gz"), rbvals:($d+"/rdwi/dwi.bvals"),
-        rbvecs:($d+"/rdwi/dwi.bvecs"), rdwi_json:($d+"/rdwi/dwi.json"),
-        subject:"sub-dry", nthreads:2, eddy_niter:2, eddy_fwhm:"10,0"
-    } * $o' > "$SCEN/config.json"
+    base_config "$SCEN/input" "$overrides" > "$SCEN/config.json"
     printf '\n--- %s ---\n' "$name"
     ( cd "$SCEN" && PATH="$bindir:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
         > "$SCEN/log.txt" 2>&1
@@ -63,8 +73,8 @@ check "gradients match the merged volume count" bash -c '
     [ "$n" = "20" ]'
 check "topup ran"                grep -q -- "--topup=" <<< "$(eddy_cmd)"
 check "no slice-to-volume on CPU" bash -c '! grep -q -- "--mporder" <<< "$(cat "'"$SCEN"'"/work/eddy/eddy_corrected.eddy_command_txt)"'
-check "48 ROIs x 4 metrics recorded" bash -c '
-    [ "$(tail -n +2 "'"$SCEN"'/output/roistats/roi_stats.csv" | wc -l)" = "192" ]'
+check "50 ROIs x 4 metrics recorded" bash -c '
+    [ "$(tail -n +2 "'"$SCEN"'/output/roistats/roi_stats.csv" | wc -l)" = "200" ]'
 check "product.json is valid"    jq empty "$SCEN/product.json"
 
 # ---------------------------------------------------------------------------
@@ -125,11 +135,11 @@ check "product.json still written" jq empty "$SCEN/product.json"
 
 # ---------------------------------------------------------------------------
 scenario "6-linear-atlas-interp" "$BIN" '{"eddy_binary":"eddy_openmp","atlas_interpolation":"Linear","write_roi_masks":true,"roi_metrics":["FA"]}'
-check "legacy interpolation logged" grep -q "interpolation: Linear" "$SCEN/log.txt"
+check "linear interpolation logged" grep -q "interpolation: Linear" "$SCEN/log.txt"
 check "labels rounded back to integers" grep -q "rounding interpolated label values" "$SCEN/log.txt"
-check "48 ROI masks written"    bash -c '[ "$(ls "'"$SCEN"'"/work/reg/roi/Roi_*.nii.gz | wc -l)" = "48" ]'
+check "50 ROI masks written"    bash -c '[ "$(ls "'"$SCEN"'"/work/reg/roi/Roi_*.nii.gz | wc -l)" = "50" ]'
 check "single metric recorded"  bash -c '
-    [ "$(tail -n +2 "'"$SCEN"'/output/roistats/roi_stats.csv" | wc -l)" = "48" ]'
+    [ "$(tail -n +2 "'"$SCEN"'/output/roistats/roi_stats.csv" | wc -l)" = "50" ]'
 
 # --------------------------------------------------- multi-shell selection ----
 # The acquisition this app targets: b=0 / 1500 / 3000, where dtifit must be
@@ -174,14 +184,8 @@ printf '\n--- a shell the data does not contain is refused ---\n'
 SCEN="$ROOT/11-shell-absent"
 mkdir -p "$SCEN"
 python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" "${SHELL_DATA_ARGS[@]}" >/dev/null
-jq -n --arg d "$SCEN/input" '{
-    dwi:($d+"/dwi/dwi.nii.gz"), bvals:($d+"/dwi/dwi.bvals"),
-    bvecs:($d+"/dwi/dwi.bvecs"), dwi_json:($d+"/dwi/dwi.json"),
-    rdwi:($d+"/rdwi/dwi.nii.gz"), rbvals:($d+"/rdwi/dwi.bvals"),
-    rbvecs:($d+"/rdwi/dwi.bvecs"), rdwi_json:($d+"/rdwi/dwi.json"),
-    subject:"sub-dry", nthreads:2, eddy_niter:2, eddy_fwhm:"10,0",
-    eddy_binary:"eddy_openmp", dtifit_shell:"800"
-}' > "$SCEN/config.json"
+base_config "$SCEN/input" '{"eddy_binary":"eddy_openmp","dtifit_shell":"800"}' \
+    > "$SCEN/config.json"
 ( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) > "$SCEN/log.txt" 2>&1
 check "pipeline fails rather than fitting the wrong shell" test $? -ne 0
 check "the error names the shells that are present" \
@@ -216,14 +220,7 @@ json.dump({"global": {"const": {
           open(path, "w"))
 EOPY
 done
-jq -n --arg d "$SCEN/input" '{
-    dwi:($d+"/dwi/dwi.nii.gz"), bvals:($d+"/dwi/dwi.bvals"),
-    bvecs:($d+"/dwi/dwi.bvecs"), dwi_json:($d+"/dwi/dwi.json"),
-    rdwi:($d+"/rdwi/dwi.nii.gz"), rbvals:($d+"/rdwi/dwi.bvals"),
-    rbvecs:($d+"/rdwi/dwi.bvecs"), rdwi_json:($d+"/rdwi/dwi.json"),
-    subject:"sub-dry", nthreads:2, eddy_niter:2, eddy_fwhm:"10,0",
-    eddy_binary:"eddy_openmp"
-}' > "$SCEN/config.json"
+base_config "$SCEN/input" '{"eddy_binary":"eddy_openmp"}' > "$SCEN/config.json"
 ( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
     > "$SCEN/log.txt" 2>&1
 check "pipeline exits 0 with no hand-entered acqparams values" test $? -eq 0
@@ -272,14 +269,7 @@ printf '\n--- CUDA eddy without a GPU, require_gpu=true ---\n'
 SCEN="$ROOT/13-require-gpu"
 mkdir -p "$SCEN"
 python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
-jq -n --arg d "$SCEN/input" '{
-    dwi:($d+"/dwi/dwi.nii.gz"), bvals:($d+"/dwi/dwi.bvals"),
-    bvecs:($d+"/dwi/dwi.bvecs"), dwi_json:($d+"/dwi/dwi.json"),
-    rdwi:($d+"/rdwi/dwi.nii.gz"), rbvals:($d+"/rdwi/dwi.bvals"),
-    rbvecs:($d+"/rdwi/dwi.bvecs"), rdwi_json:($d+"/rdwi/dwi.json"),
-    subject:"sub-dry", nthreads:2, eddy_niter:2, eddy_fwhm:"10,0",
-    require_gpu:true
-}' > "$SCEN/config.json"
+base_config "$SCEN/input" '{"require_gpu":true}' > "$SCEN/config.json"
 ( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) > "$SCEN/log.txt" 2>&1
 check "pipeline fails rather than running without a GPU" test $? -ne 0
 check "the error explains how to proceed" grep -q "no GPU is visible" "$SCEN/log.txt"
@@ -294,14 +284,7 @@ python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
 for j in "$SCEN"/input/*/dwi.json; do
     jq 'del(.SliceTiming)' "$j" > "$j.tmp" && mv "$j.tmp" "$j"
 done
-jq -n --arg d "$SCEN/input" '{
-    dwi:($d+"/dwi/dwi.nii.gz"), bvals:($d+"/dwi/dwi.bvals"),
-    bvecs:($d+"/dwi/dwi.bvecs"), dwi_json:($d+"/dwi/dwi.json"),
-    rdwi:($d+"/rdwi/dwi.nii.gz"), rbvals:($d+"/rdwi/dwi.bvals"),
-    rbvecs:($d+"/rdwi/dwi.bvecs"), rdwi_json:($d+"/rdwi/dwi.json"),
-    subject:"sub-dry", nthreads:2, eddy_niter:2, eddy_fwhm:"10,0",
-    eddy_binary:"eddy_cuda10.2"
-}' > "$SCEN/config.json"
+base_config "$SCEN/input" '{"eddy_binary":"eddy_cuda10.2"}' > "$SCEN/config.json"
 ( cd "$SCEN" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
     > "$SCEN/log.txt" 2>&1
 check "pipeline exits 0" test $? -eq 0

@@ -98,6 +98,35 @@ done
 # binary being present is not enough.
 check_file "topup b02b0.cnf config" "${FSLDIR:-/opt/fsl}/etc/flirtsch/b02b0.cnf"
 
+# Stage 4 registers to FSL's JHU ICBM-DTI-81 data, and the prune deletes every
+# other atlas -- so check that these three came through it.
+echo "JHU atlas"
+FSL_ATLASES="${FSLDIR:-/opt/fsl}/data/atlases"
+check_file "JHU FA template"  "$FSL_ATLASES/JHU/JHU-ICBM-FA-1mm.nii.gz"
+check_file "JHU label image"  "$FSL_ATLASES/JHU/JHU-ICBM-labels-1mm.nii.gz"
+check_file "JHU label list"   "$FSL_ATLASES/JHU-labels.xml"
+
+# The app's own label metadata drives every ROI table, so it has to agree with
+# the label image it is read against.  FSL listed 48 regions before 6.0.5 and 50
+# from 6.0.5 on; a mismatch here means every ROI past the divergence is reported
+# under the wrong name.
+CHECKED=$((CHECKED + 1))
+APP_LABELS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/templates/JHU-ICBM-labels.json"
+if [ ! -f "$APP_LABELS" ] || [ ! -f "$FSL_ATLASES/JHU-labels.xml" ]; then
+    fail "JHU label metadata" "cannot compare: $APP_LABELS or the FSL label list is missing"
+else
+    app_n="$(jq -r '.labels | length' "$APP_LABELS")"
+    fsl_n="$(grep -c '<label ' "$FSL_ATLASES/JHU-labels.xml")"
+    max_label="$(fslstats "$FSL_ATLASES/JHU/JHU-ICBM-labels-1mm.nii.gz" -R \
+                 | awk '{printf "%d", $2 + 0.5}')"
+    if [ "$app_n" = "$fsl_n" ] && [ "$app_n" = "$max_label" ]; then
+        pass "JHU label metadata ($app_n ROIs, matching FSL's label list and image)"
+    else
+        fail "JHU label metadata" \
+             "templates/JHU-ICBM-labels.json has $app_n ROIs, JHU-labels.xml has $fsl_n, the label image goes up to $max_label"
+    fi
+fi
+
 # eddy is named differently across FSL releases; at least one must work.
 echo "eddy"
 eddy_found=""

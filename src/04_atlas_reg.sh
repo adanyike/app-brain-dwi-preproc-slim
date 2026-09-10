@@ -2,10 +2,12 @@
 # Stage 4 -- bring the JHU ICBM-DTI-81 white-matter atlas into each subject's
 # native diffusion space.
 #
-# The registration is driven the same way as the original pipeline: the JHU FA
-# template is the *moving* image and the subject's own FA map is *fixed*, so the
-# atlas labels only ever have to be pushed through one composite transform and
-# the subject's data is never resampled.
+# The JHU FA template is the *moving* image and the subject's own FA map is
+# *fixed*, so the atlas labels only ever have to be pushed through one composite
+# transform and the subject's data is never resampled.
+#
+# The template and the label image are FSL's own, read from
+# $FSLDIR/data/atlases/JHU; template_fa and atlas override them.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 source "$WORK_DIR/state.sh"
@@ -15,14 +17,16 @@ REG="$WORK_DIR/reg"
 mkdir -p "$REG"
 
 TEMPLATE_FA="$(cfg_path template_fa)"
-[ -n "$TEMPLATE_FA" ] || TEMPLATE_FA="$TEMPLATE_DIR/JHU-ICBM-FA-1mm.nii.gz"
+[ -n "$TEMPLATE_FA" ] || TEMPLATE_FA="$JHU_DIR/JHU-ICBM-FA-1mm.nii.gz"
 ATLAS="$(cfg_path atlas)"
-[ -n "$ATLAS" ] || ATLAS="$TEMPLATE_DIR/JHU-ICBM-labels-1mm.nii.gz"
+[ -n "$ATLAS" ] || ATLAS="$JHU_DIR/JHU-ICBM-labels-1mm.nii.gz"
 ATLAS_LABELS="$(cfg_path atlas_labels)"
 [ -n "$ATLAS_LABELS" ] || ATLAS_LABELS="$TEMPLATE_DIR/JHU-ICBM-labels.json"
 
-[ -f "$TEMPLATE_FA" ] || die "template FA not found at $TEMPLATE_FA"
-[ -f "$ATLAS" ]       || die "atlas not found at $ATLAS"
+ATLAS_HINT="it ships with FSL under \$FSLDIR/data/atlases/JHU; set FSLDIR, or name the file with the 'template_fa' / 'atlas' config key"
+[ -f "$TEMPLATE_FA" ] || die "template FA not found at $TEMPLATE_FA -- $ATLAS_HINT"
+[ -f "$ATLAS" ]       || die "atlas not found at $ATLAS -- $ATLAS_HINT"
+[ -f "$ATLAS_LABELS" ] || die "atlas label metadata not found at $ATLAS_LABELS"
 
 PREFIX="$REG/template_to_native"
 TRANSFORM_TYPE="$(cfg ants_transform s)"
@@ -40,10 +44,10 @@ WARP="${PREFIX}1Warp.nii.gz"
 [ -f "$AFFINE" ] || die "antsRegistrationSyN.sh produced no affine at $AFFINE"
 
 ATLAS_NATIVE="$REG/atlas_in_native.nii.gz"
-# MultiLabel is the interpolator ANTs recommends for label images; the original
-# pipeline used the Linear default and then recovered integer labels by
-# thresholding, which blurs small ROIs.  Set atlas_interpolation to "Linear" to
-# reproduce the legacy behaviour exactly.
+# MultiLabel is the interpolator ANTs recommends for label images.  Linear
+# interpolation of a label image blurs small ROIs and has to be followed by
+# rounding to recover integers; set atlas_interpolation to "Linear" if that is
+# what a comparison needs.
 INTERP="$(cfg atlas_interpolation MultiLabel)"
 
 APPLY_ARGS=(-d 3 -i "$ATLAS" -r "$FA_MAP" -o "$ATLAS_NATIVE" -n "$INTERP")
@@ -59,13 +63,13 @@ if [ "$INTERP" = Linear ] || [ "$INTERP" = BSpline ]; then
     mv "$REG/atlas_rounded.nii.gz" "$ATLAS_NATIVE"
 fi
 
-# Optional per-ROI binary masks, matching the Roi_<n>.nii.gz files the original
-# pipeline wrote.  Off by default: the statistics are computed straight from the
-# label image, so 48 extra NIfTIs are usually just clutter.
+# Optional per-ROI binary masks, one Roi_<n>.nii.gz per label.  Off by default:
+# the statistics are computed straight from the label image, so 50 extra NIfTIs
+# are usually just clutter.
 if is_true "$(cfg_bool write_roi_masks false)"; then
     ROI_DIR="$REG/roi"
     mkdir -p "$ROI_DIR"
-    N_LABELS="$(jq -r '.n_labels' "$ATLAS_LABELS" 2>/dev/null || echo 48)"
+    N_LABELS="$(jq -r '.n_labels' "$ATLAS_LABELS" 2>/dev/null || echo 50)"
     log "writing $N_LABELS binary ROI masks"
     for k in $(seq 1 "$N_LABELS"); do
         fslmaths "$ATLAS_NATIVE" -thr "$k" -uthr "$k" -bin "$ROI_DIR/Roi_${k}.nii.gz"

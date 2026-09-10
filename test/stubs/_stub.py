@@ -310,11 +310,9 @@ def cmd_passthrough(argv):
 def cmd_dwibiascorrect(argv):
     """Reject a wrong invocation the way MRtrix3 does.
 
-    This stub used to accept the algorithm as an optional leading word and
-    shrug when it was absent.  That made the dry run pass on a call the real
-    command rejects, and a real dataset then failed at stage 3 with
-    "argument algorithm: invalid choice".  A stub that is more permissive than
-    the tool it stands in for is worse than no stub at all.
+    The algorithm is required and must be one MRtrix3 knows.  A stub that is
+    more permissive than the tool it stands in for is worse than no stub at
+    all: the dry run passes on a call the real command rejects.
     """
     algorithms = ("ants", "fsl")
     if not argv or argv[0].startswith("-"):

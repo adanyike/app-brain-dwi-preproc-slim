@@ -4,8 +4,8 @@
 #
 # The b=0 volumes selected in stage 0 are pulled out one at a time and merged in
 # the order recorded in topup_b0s.txt, so that row N of acqparams.txt describes
-# volume N of --imain.  (The original pipeline merged with a `bzero*` shell
-# glob, which sorts bzero_10 before bzero_2; the explicit list avoids that.)
+# volume N of --imain.  An explicit list rather than a shell glob: a glob sorts
+# bzero_10 before bzero_2 and silently misorders the merge.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 source "$WORK_DIR/state.sh"
@@ -44,10 +44,10 @@ acq_rows="$(grep -c '[^[:space:]]' "$ACQPARAMS")"
 
 if [ "$HAS_REVERSE_PE" = true ]; then
     TOPUP_CONFIG="$(cfg topup_config b02b0.cnf)"
-    # Default matches the original pipeline: estimate movement for the first two
-    # levels only, use the scaled-conjugate-gradient minimiser after that, and
-    # never subsample (Philips/Siemens brain data at this resolution converges
-    # fine and subsampling costs accuracy).
+    # Estimate movement for the first two levels only, use the
+    # scaled-conjugate-gradient minimiser after that, and never subsample:
+    # brain data at this resolution converges fine and subsampling costs
+    # accuracy.
     TOPUP_EXTRA="$(cfg topup_extra '--estmov=1,1,0,0,0,0,0,0,0 --minmet=0,0,1,1,1,1,1,1,1 --subsamp=1,1,1,1,1,1,1,1,1')"
 
     log "running topup (config $TOPUP_CONFIG)"

@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Build an FSL ``eddy`` slice-specification (slspec) file from BIDS metadata.
 
-This is a port of ``do_slspec.m`` from the original MATLAB pipeline, with two
-differences that make it safe to run unattended inside a container:
+Two things make this safe to run unattended inside a container:
 
 * ``SliceTiming`` (seconds, BIDS) is the primary source.  Siemens
-  ``CsaImage.MosaicRefAcqTimes`` (milliseconds) is still honoured when present
-  so that legacy dcm2niix sidecars keep working.  Either may sit nested inside
-  a DICOM parameter dump and be repeated once per volume; see ``sidecar.py``.
+  ``CsaImage.MosaicRefAcqTimes`` (milliseconds) is honoured when present, so
+  older dcm2niix sidecars work too.  Either may sit nested inside a DICOM
+  parameter dump and be repeated once per volume; see ``sidecar.py``.
 * Slice groups are formed by *equal acquisition time* rather than by reshaping
   the sort order blindly.  For a well formed multiband acquisition the two are
   identical, but grouping by time detects a non-uniform multiband factor and
@@ -63,8 +62,7 @@ def read_slice_times(meta: dict) -> Tuple[List[float], str]:
 def group_by_time(slice_times: Sequence[float]) -> List[List[int]]:
     """Group 0-based slice indices by acquisition time, earliest group first.
 
-    Ties keep their natural slice order inside a group, which reproduces the
-    stable sort used by the MATLAB implementation.
+    Ties keep their natural slice order inside a group.
     """
     groups: "OrderedDict[float, List[int]]" = OrderedDict()
     for slice_index in sorted(range(len(slice_times)), key=lambda i: slice_times[i]):

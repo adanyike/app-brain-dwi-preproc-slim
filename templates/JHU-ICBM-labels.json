@@ -1,9 +1,10 @@
 {
   "atlas": "JHU ICBM-DTI-81 white-matter labels",
   "space": "MNI152 (ICBM-DTI-81), 1 mm isotropic",
-  "reference_image": "JHU-ICBM-FA-1mm.nii.gz",
-  "label_image": "JHU-ICBM-labels-1mm.nii.gz",
-  "n_labels": 48,
+  "source": "$FSLDIR/data/atlases/JHU-labels.xml",
+  "reference_image": "$FSLDIR/data/atlases/JHU/JHU-ICBM-FA-1mm.nii.gz",
+  "label_image": "$FSLDIR/data/atlases/JHU/JHU-ICBM-labels-1mm.nii.gz",
+  "n_labels": 50,
   "background_value": 0,
   "citation": "Mori S, Wakana S, van Zijl PCM, Nagae-Poetscher LM. MRI Atlas of Human White Matter. Elsevier, 2005.",
   "labels": [
@@ -11,625 +12,301 @@
       "index": 1,
       "name": "Middle cerebellar peduncle",
       "abbreviation": "MCP",
-      "hemisphere": "midline/bilateral",
-      "template_voxels": 15644,
-      "template_volume_mm3": 15644.0,
-      "template_centroid_mni": [
-        0.5,
-        -39.9,
-        -35.4
-      ]
+      "hemisphere": "midline/bilateral"
     },
     {
       "index": 2,
       "name": "Pontine crossing tract (a part of MCP)",
       "abbreviation": "PCT",
-      "hemisphere": "midline/bilateral",
-      "template_voxels": 1500,
-      "template_volume_mm3": 1500.0,
-      "template_centroid_mni": [
-        0.5,
-        -29.2,
-        -30.8
-      ]
+      "hemisphere": "midline/bilateral"
     },
     {
       "index": 3,
       "name": "Genu of corpus callosum",
       "abbreviation": "GCC",
-      "hemisphere": "midline/bilateral",
-      "template_voxels": 8851,
-      "template_volume_mm3": 8851.0,
-      "template_centroid_mni": [
-        0.3,
-        26.1,
-        7.3
-      ]
+      "hemisphere": "midline/bilateral"
     },
     {
       "index": 4,
       "name": "Body of corpus callosum",
       "abbreviation": "BCC",
-      "hemisphere": "midline/bilateral",
-      "template_voxels": 13711,
-      "template_volume_mm3": 13711.0,
-      "template_centroid_mni": [
-        0.6,
-        -5.3,
-        27.3
-      ]
+      "hemisphere": "midline/bilateral"
     },
     {
       "index": 5,
       "name": "Splenium of corpus callosum",
       "abbreviation": "SCC",
-      "hemisphere": "midline/bilateral",
-      "template_voxels": 12729,
-      "template_volume_mm3": 12729.0,
-      "template_centroid_mni": [
-        0.7,
-        -42.2,
-        17.8
-      ]
+      "hemisphere": "midline/bilateral"
     },
     {
       "index": 6,
       "name": "Fornix (column and body of fornix)",
       "abbreviation": "FX",
-      "hemisphere": "midline/bilateral",
-      "template_voxels": 659,
-      "template_volume_mm3": 659.0,
-      "template_centroid_mni": [
-        0.5,
-        -6.1,
-        12.9
-      ]
+      "hemisphere": "midline/bilateral"
     },
     {
       "index": 7,
       "name": "Corticospinal tract R",
       "abbreviation": "CST_R",
-      "hemisphere": "right",
-      "template_voxels": 1362,
-      "template_volume_mm3": 1362.0,
-      "template_centroid_mni": [
-        7.1,
-        -24.9,
-        -32.6
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 8,
       "name": "Corticospinal tract L",
       "abbreviation": "CST_L",
-      "hemisphere": "left",
-      "template_voxels": 1370,
-      "template_volume_mm3": 1370.0,
-      "template_centroid_mni": [
-        -6.0,
-        -25.0,
-        -32.8
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 9,
       "name": "Medial lemniscus R",
       "abbreviation": "ML_R",
-      "hemisphere": "right",
-      "template_voxels": 690,
-      "template_volume_mm3": 690.0,
-      "template_centroid_mni": [
-        5.6,
-        -36.7,
-        -33.5
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 10,
       "name": "Medial lemniscus L",
       "abbreviation": "ML_L",
-      "hemisphere": "left",
-      "template_voxels": 699,
-      "template_volume_mm3": 699.0,
-      "template_centroid_mni": [
-        -4.5,
-        -36.7,
-        -33.4
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 11,
       "name": "Inferior cerebellar peduncle R",
       "abbreviation": "ICP_R",
-      "hemisphere": "right",
-      "template_voxels": 968,
-      "template_volume_mm3": 968.0,
-      "template_centroid_mni": [
-        9.4,
-        -44.4,
-        -37.4
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 12,
       "name": "Inferior cerebellar peduncle L",
       "abbreviation": "ICP_L",
-      "hemisphere": "left",
-      "template_voxels": 968,
-      "template_volume_mm3": 968.0,
-      "template_centroid_mni": [
-        -8.4,
-        -44.4,
-        -37.4
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 13,
       "name": "Superior cerebellar peduncle R",
       "abbreviation": "SCP_R",
-      "hemisphere": "right",
-      "template_voxels": 992,
-      "template_volume_mm3": 992.0,
-      "template_centroid_mni": [
-        6.5,
-        -41.6,
-        -24.6
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 14,
       "name": "Superior cerebellar peduncle L",
       "abbreviation": "SCP_L",
-      "hemisphere": "left",
-      "template_voxels": 992,
-      "template_volume_mm3": 992.0,
-      "template_centroid_mni": [
-        -5.5,
-        -41.6,
-        -24.6
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 15,
       "name": "Cerebral peduncle R",
       "abbreviation": "CP_R",
-      "hemisphere": "right",
-      "template_voxels": 2278,
-      "template_volume_mm3": 2278.0,
-      "template_centroid_mni": [
-        13.3,
-        -18.4,
-        -12.5
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 16,
       "name": "Cerebral peduncle L",
       "abbreviation": "CP_L",
-      "hemisphere": "left",
-      "template_voxels": 2278,
-      "template_volume_mm3": 2278.0,
-      "template_centroid_mni": [
-        -12.3,
-        -18.4,
-        -12.5
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 17,
       "name": "Anterior limb of internal capsule R",
       "abbreviation": "ALIC_R",
-      "hemisphere": "right",
-      "template_voxels": 3138,
-      "template_volume_mm3": 3138.0,
-      "template_centroid_mni": [
-        18.1,
-        7.6,
-        8.1
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 18,
       "name": "Anterior limb of internal capsule L",
       "abbreviation": "ALIC_L",
-      "hemisphere": "left",
-      "template_voxels": 3018,
-      "template_volume_mm3": 3018.0,
-      "template_centroid_mni": [
-        -17.2,
-        7.4,
-        8.3
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 19,
       "name": "Posterior limb of internal capsule R",
       "abbreviation": "PLIC_R",
-      "hemisphere": "right",
-      "template_voxels": 3754,
-      "template_volume_mm3": 3754.0,
-      "template_centroid_mni": [
-        20.5,
-        -13.2,
-        7.9
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 20,
       "name": "Posterior limb of internal capsule L",
       "abbreviation": "PLIC_L",
-      "hemisphere": "left",
-      "template_voxels": 3752,
-      "template_volume_mm3": 3752.0,
-      "template_centroid_mni": [
-        -19.5,
-        -13.2,
-        7.9
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 21,
       "name": "Retrolenticular part of internal capsule R",
       "abbreviation": "RLIC_R",
-      "hemisphere": "right",
-      "template_voxels": 2515,
-      "template_volume_mm3": 2515.0,
-      "template_centroid_mni": [
-        31.5,
-        -29.3,
-        6.0
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 22,
       "name": "Retrolenticular part of internal capsule L",
       "abbreviation": "RLIC_L",
-      "hemisphere": "left",
-      "template_voxels": 2469,
-      "template_volume_mm3": 2469.0,
-      "template_centroid_mni": [
-        -30.2,
-        -29.4,
-        5.8
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 23,
       "name": "Anterior corona radiata R",
       "abbreviation": "ACR_R",
-      "hemisphere": "right",
-      "template_voxels": 6849,
-      "template_volume_mm3": 6849.0,
-      "template_centroid_mni": [
-        21.5,
-        28.1,
-        9.7
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 24,
       "name": "Anterior corona radiata L",
       "abbreviation": "ACR_L",
-      "hemisphere": "left",
-      "template_voxels": 6852,
-      "template_volume_mm3": 6852.0,
-      "template_centroid_mni": [
-        -20.5,
-        28.1,
-        9.7
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 25,
       "name": "Superior corona radiata R",
       "abbreviation": "SCR_R",
-      "hemisphere": "right",
-      "template_voxels": 7500,
-      "template_volume_mm3": 7500.0,
-      "template_centroid_mni": [
-        23.9,
-        -7.8,
-        30.0
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 26,
       "name": "Superior corona radiata L",
       "abbreviation": "SCR_L",
-      "hemisphere": "left",
-      "template_voxels": 7508,
-      "template_volume_mm3": 7508.0,
-      "template_centroid_mni": [
-        -22.9,
-        -7.8,
-        30.0
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 27,
       "name": "Posterior corona radiata R",
       "abbreviation": "PCR_R",
-      "hemisphere": "right",
-      "template_voxels": 3728,
-      "template_volume_mm3": 3728.0,
-      "template_centroid_mni": [
-        25.4,
-        -38.1,
-        27.8
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 28,
       "name": "Posterior corona radiata L",
       "abbreviation": "PCR_L",
-      "hemisphere": "left",
-      "template_voxels": 3714,
-      "template_volume_mm3": 3714.0,
-      "template_centroid_mni": [
-        -24.4,
-        -38.0,
-        27.9
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 29,
       "name": "Posterior thalamic radiation (include optic radiation) R",
       "abbreviation": "PTR_R",
-      "hemisphere": "right",
-      "template_voxels": 3972,
-      "template_volume_mm3": 3972.0,
-      "template_centroid_mni": [
-        33.9,
-        -54.7,
-        7.2
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 30,
       "name": "Posterior thalamic radiation (include optic radiation) L",
       "abbreviation": "PTR_L",
-      "hemisphere": "left",
-      "template_voxels": 3978,
-      "template_volume_mm3": 3978.0,
-      "template_centroid_mni": [
-        -32.6,
-        -54.7,
-        7.1
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 31,
       "name": "Sagittal stratum (include inferior longitudinal fasciculus and inferior fronto-occipital fasciculus) R",
       "abbreviation": "SS_R",
-      "hemisphere": "right",
-      "template_voxels": 2228,
-      "template_volume_mm3": 2228.0,
-      "template_centroid_mni": [
-        39.8,
-        -31.5,
-        -9.4
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 32,
       "name": "Sagittal stratum (include inferior longitudinal fasciculus and inferior fronto-occipital fasciculus) L",
       "abbreviation": "SS_L",
-      "hemisphere": "left",
-      "template_voxels": 2231,
-      "template_volume_mm3": 2231.0,
-      "template_centroid_mni": [
-        -38.8,
-        -31.5,
-        -9.4
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 33,
       "name": "External capsule R",
       "abbreviation": "EC_R",
-      "hemisphere": "right",
-      "template_voxels": 5611,
-      "template_volume_mm3": 5611.0,
-      "template_centroid_mni": [
-        30.6,
-        0.2,
-        1.3
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 34,
       "name": "External capsule L",
       "abbreviation": "EC_L",
-      "hemisphere": "left",
-      "template_voxels": 5587,
-      "template_volume_mm3": 5587.0,
-      "template_centroid_mni": [
-        -29.6,
-        0.3,
-        1.4
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 35,
       "name": "Cingulum (cingulate gyrus) R",
       "abbreviation": "CGC_R",
-      "hemisphere": "right",
-      "template_voxels": 2342,
-      "template_volume_mm3": 2342.0,
-      "template_centroid_mni": [
-        8.2,
-        -11.1,
-        29.9
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 36,
       "name": "Cingulum (cingulate gyrus) L",
       "abbreviation": "CGC_L",
-      "hemisphere": "left",
-      "template_voxels": 2751,
-      "template_volume_mm3": 2751.0,
-      "template_centroid_mni": [
-        -7.3,
-        -10.2,
-        30.0
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 37,
       "name": "Cingulum (hippocampus) R",
       "abbreviation": "CGH_R",
-      "hemisphere": "right",
-      "template_voxels": 1236,
-      "template_volume_mm3": 1236.0,
-      "template_centroid_mni": [
-        22.0,
-        -29.2,
-        -13.9
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 38,
       "name": "Cingulum (hippocampus) L",
       "abbreviation": "CGH_L",
-      "hemisphere": "left",
-      "template_voxels": 1155,
-      "template_volume_mm3": 1155.0,
-      "template_centroid_mni": [
-        -19.6,
-        -32.0,
-        -12.7
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 39,
       "name": "Fornix (cres) / Stria terminalis (can not be resolved with current resolution) R",
       "abbreviation": "FXST_R",
-      "hemisphere": "right",
-      "template_voxels": 1124,
-      "template_volume_mm3": 1124.0,
-      "template_centroid_mni": [
-        29.1,
-        -24.0,
-        -6.2
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 40,
       "name": "Fornix (cres) / Stria terminalis (can not be resolved with current resolution) L",
       "abbreviation": "FXST_L",
-      "hemisphere": "left",
-      "template_voxels": 1125,
-      "template_volume_mm3": 1125.0,
-      "template_centroid_mni": [
-        -28.1,
-        -24.0,
-        -6.2
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 41,
       "name": "Superior longitudinal fasciculus R",
       "abbreviation": "SLF_R",
-      "hemisphere": "right",
-      "template_voxels": 6607,
-      "template_volume_mm3": 6607.0,
-      "template_centroid_mni": [
-        36.4,
-        -25.6,
-        25.9
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 42,
       "name": "Superior longitudinal fasciculus L",
       "abbreviation": "SLF_L",
-      "hemisphere": "left",
-      "template_voxels": 6605,
-      "template_volume_mm3": 6605.0,
-      "template_centroid_mni": [
-        -35.4,
-        -25.6,
-        25.9
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 43,
       "name": "Superior fronto-occipital fasciculus (could be a part of anterior internal capsule) R",
       "abbreviation": "SFO_R",
-      "hemisphere": "right",
-      "template_voxels": 507,
-      "template_volume_mm3": 507.0,
-      "template_centroid_mni": [
-        21.2,
-        2.0,
-        21.1
-      ]
+      "hemisphere": "right"
     },
     {
       "index": 44,
       "name": "Superior fronto-occipital fasciculus (could be a part of anterior internal capsule) L",
       "abbreviation": "SFO_L",
-      "hemisphere": "left",
-      "template_voxels": 507,
-      "template_volume_mm3": 507.0,
-      "template_centroid_mni": [
-        -20.2,
-        2.0,
-        21.1
-      ]
+      "hemisphere": "left"
     },
     {
       "index": 45,
-      "name": "Uncinate fasciculus R",
-      "abbreviation": "UNC_R",
-      "hemisphere": "right",
-      "template_voxels": 380,
-      "template_volume_mm3": 380.0,
-      "template_centroid_mni": [
-        34.0,
-        1.2,
-        -15.8
-      ]
+      "name": "Inferior fronto-occipital fasciculus R",
+      "abbreviation": "IFO_R",
+      "hemisphere": "right"
     },
     {
       "index": 46,
-      "name": "Uncinate fasciculus L",
-      "abbreviation": "UNC_L",
-      "hemisphere": "left",
-      "template_voxels": 376,
-      "template_volume_mm3": 376.0,
-      "template_centroid_mni": [
-        -33.5,
-        -1.1,
-        -15.9
-      ]
+      "name": "Inferior fronto-occipital fasciculus L",
+      "abbreviation": "IFO_L",
+      "hemisphere": "left"
     },
     {
       "index": 47,
-      "name": "Tapetum R",
-      "abbreviation": "TAP_R",
-      "hemisphere": "right",
-      "template_voxels": 596,
-      "template_volume_mm3": 596.0,
-      "template_centroid_mni": [
-        29.5,
-        -44.7,
-        14.4
-      ]
+      "name": "Uncinate fasciculus R",
+      "abbreviation": "UNC_R",
+      "hemisphere": "right"
     },
     {
       "index": 48,
+      "name": "Uncinate fasciculus L",
+      "abbreviation": "UNC_L",
+      "hemisphere": "left"
+    },
+    {
+      "index": 49,
+      "name": "Tapetum R",
+      "abbreviation": "TAP_R",
+      "hemisphere": "right"
+    },
+    {
+      "index": 50,
       "name": "Tapetum L",
       "abbreviation": "TAP_L",
-      "hemisphere": "left",
-      "template_voxels": 600,
-      "template_volume_mm3": 600.0,
-      "template_centroid_mni": [
-        -27.0,
-        -46.7,
-        14.4
-      ]
+      "hemisphere": "left"
     }
   ]
 }
