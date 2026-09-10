@@ -50,19 +50,20 @@ reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction.
 
 ### The atlas
 
-- Both atlas images are read from `$FSLDIR/data/atlases/JHU`. The label image is
-  FSL's own; the FA template is the repository's copy, which the container
-  installs there in place of FSL's, so the registration target does not vary
-  with the FSL release. `template_fa` and `atlas` override either.
+- The FA template stage 4 registers to is the repository's own
+  (`templates/JHU-ICBM-FA-1mm.nii.gz`), so the registration target does not vary
+  with the FSL release or with how the app is launched. The label image it warps
+  is FSL's, read from `$FSLDIR/data/atlases/JHU`. `template_fa` and `atlas`
+  override either.
 - All 50 JHU ICBM-DTI-81 regions are reported. FSL's label list omitted the
   inferior fronto-occipital fasciculus before 6.0.5, and a 48-entry list read
   against the 50-label image reports every region from 45 upwards under the
   wrong name.
 - `docker/selftest.sh` fails the build when `templates/JHU-ICBM-labels.json`,
   FSL's `JHU-labels.xml` and the label image do not agree on how many regions
-  there are, when the installed FA template is not byte-identical to the
-  repository's, or when the template and the label image do not share a grid —
-  the transform is estimated from one and applied to the other.
+  there are, or when the FA template and the label image do not share a grid —
+  the transform is estimated from one and applied to the other, and nothing else
+  ties the two files together.
 
 ### The container
 
@@ -75,8 +76,9 @@ reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction.
   toolchain and LLVM/clang libraries, OpenVINO, FIRST models, standard-space and
   Oxford-MM data, POSSUM, XTRACT, FIX macaque masks, sources, headers, docs,
   conda cache and metadata, and every atlas but the JHU label image and label
-  list stage 4 reads. matplotlib and pandas are deliberately kept: `eddy_quad`
-  renders its report with matplotlib.
+  list stage 4 reads — FSL's own JHU FA template included, since the app
+  registers to its own copy. matplotlib and pandas are deliberately kept:
+  `eddy_quad` renders its report with matplotlib.
 - `docker/collect-binaries.sh` — copies named programs plus, via `ldd`, exactly
   the libraries they need from inside their own prefix. A binary that is not
   found fails the build. Applied to ANTs only: 2.6 GB to 135 MB. MRtrix3 is

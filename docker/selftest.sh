@@ -101,35 +101,27 @@ for cnf in b02b0_1.cnf b02b0.cnf; do
     check_file "topup $cnf config" "${FSLDIR:-/opt/fsl}/etc/flirtsch/$cnf"
 done
 
-# Stage 4 registers to the JHU ICBM-DTI-81 data under $FSLDIR: the label image
-# and label list survive the prune, and the FA template is the app's own copy,
-# installed there by the Dockerfile after FSL's was pruned.
+# Stage 4 registers the app's own JHU FA template to each subject and warps
+# FSL's label image with the result, so one file comes from templates/ and the
+# other has to survive the prune.
 echo "JHU atlas"
 FSL_ATLASES="${FSLDIR:-/opt/fsl}/data/atlases"
 APP_DIR_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-check_file "JHU FA template"  "$FSL_ATLASES/JHU/JHU-ICBM-FA-1mm.nii.gz"
-check_file "JHU label image"  "$FSL_ATLASES/JHU/JHU-ICBM-labels-1mm.nii.gz"
+APP_FA="$APP_DIR_SELF/templates/JHU-ICBM-FA-1mm.nii.gz"
+FSL_LABELS="$FSL_ATLASES/JHU/JHU-ICBM-labels-1mm.nii.gz"
+check_file "JHU FA template"  "$APP_FA"
+check_file "JHU label image"  "$FSL_LABELS"
 check_file "JHU label list"   "$FSL_ATLASES/JHU-labels.xml"
 
-# The installed template must be the app's, byte for byte.  If FSL's own copy
-# were still there the registration would silently target a different image.
-CHECKED=$((CHECKED + 1))
-if cmp -s "$APP_DIR_SELF/templates/JHU-ICBM-FA-1mm.nii.gz" \
-          "$FSL_ATLASES/JHU/JHU-ICBM-FA-1mm.nii.gz"; then
-    pass "installed FA template is the app's copy"
-else
-    fail "installed FA template" \
-         "$FSL_ATLASES/JHU/JHU-ICBM-FA-1mm.nii.gz differs from templates/JHU-ICBM-FA-1mm.nii.gz"
-fi
-
 # The transform is estimated from the FA template and then applied to the label
-# image, so the two have to sit on the same grid.  They come from different
-# places now, which is exactly when that stops being guaranteed.
+# image, so the two have to sit on the same grid.  Nothing ties them together --
+# one ships with this app, the other with whatever FSL release is installed --
+# so check rather than assume.
 CHECKED=$((CHECKED + 1))
 grid_fa=""; grid_lab=""
 for key in dim1 dim2 dim3 pixdim1 pixdim2 pixdim3 qform_xorient qform_yorient qform_zorient; do
-    grid_fa="$grid_fa $(fslval "$FSL_ATLASES/JHU/JHU-ICBM-FA-1mm.nii.gz" "$key" 2>/dev/null | tr -d '[:space:]')"
-    grid_lab="$grid_lab $(fslval "$FSL_ATLASES/JHU/JHU-ICBM-labels-1mm.nii.gz" "$key" 2>/dev/null | tr -d '[:space:]')"
+    grid_fa="$grid_fa $(fslval "$APP_FA" "$key" 2>/dev/null | tr -d '[:space:]')"
+    grid_lab="$grid_lab $(fslval "$FSL_LABELS" "$key" 2>/dev/null | tr -d '[:space:]')"
 done
 if [ -n "$(tr -d '[:space:]' <<< "$grid_fa")" ] && [ "$grid_fa" = "$grid_lab" ]; then
     pass "FA template and label image share a grid ($(tr -s ' ' <<< "$grid_fa" | cut -d' ' -f2-4 | tr ' ' 'x'))"
@@ -148,7 +140,7 @@ if [ ! -f "$APP_LABELS" ] || [ ! -f "$FSL_ATLASES/JHU-labels.xml" ]; then
 else
     app_n="$(jq -r '.labels | length' "$APP_LABELS")"
     fsl_n="$(grep -c '<label ' "$FSL_ATLASES/JHU-labels.xml")"
-    max_label="$(fslstats "$FSL_ATLASES/JHU/JHU-ICBM-labels-1mm.nii.gz" -R \
+    max_label="$(fslstats "$FSL_LABELS" -R \
                  | awk '{printf "%d", $2 + 0.5}')"
     if [ "$app_n" = "$fsl_n" ] && [ "$app_n" = "$max_label" ]; then
         pass "JHU label metadata ($app_n ROIs, matching FSL's label list and image)"

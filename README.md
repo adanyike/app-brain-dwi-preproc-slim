@@ -151,15 +151,16 @@ Provided by the container:
 | MRtrix3 | 3.0.8 |
 | ANTs | 2.6.5 |
 
-The atlas stage reads both images from `$FSLDIR/data/atlases/JHU`. The label
-image is FSL's; the FA template is this repository's
-`templates/JHU-ICBM-FA-1mm.nii.gz`, which the container installs there in place
-of FSL's so that every run registers to the same image. The ROI names and
-abbreviations that go into the tables live in `templates/JHU-ICBM-labels.json`;
-FSL listed 48 of the 50 regions before 6.0.5. The self-test refuses to build an
-image whose label list and label image disagree on how many regions there are,
-whose installed template is not the repository's, or whose template and label
-image do not share a grid.
+The atlas stage uses two images from different places. The FA template it
+registers to is this repository's `templates/JHU-ICBM-FA-1mm.nii.gz`, so the
+registration target is the same image however the app is run and whatever FSL
+release is installed. The label image it warps is FSL's, read from
+`$FSLDIR/data/atlases/JHU`, along with the label list the ROI names are checked
+against; the names and abbreviations themselves live in
+`templates/JHU-ICBM-labels.json`, and FSL listed 48 of the 50 regions before
+6.0.5. The self-test refuses to build an image whose label list and label image
+disagree on how many regions there are, or whose template and label image do not
+share a grid — the transform is estimated from one and applied to the other.
 
 ## Citing
 

@@ -2,7 +2,7 @@
   "atlas": "JHU ICBM-DTI-81 white-matter labels",
   "space": "MNI152 (ICBM-DTI-81), 1 mm isotropic",
   "source": "$FSLDIR/data/atlases/JHU-labels.xml",
-  "reference_image": "$FSLDIR/data/atlases/JHU/JHU-ICBM-FA-1mm.nii.gz",
+  "reference_image": "templates/JHU-ICBM-FA-1mm.nii.gz",
   "label_image": "$FSLDIR/data/atlases/JHU/JHU-ICBM-labels-1mm.nii.gz",
   "n_labels": 50,
   "background_value": 0,

@@ -6,9 +6,10 @@
 # *fixed*, so the atlas labels only ever have to be pushed through one composite
 # transform and the subject's data is never resampled.
 #
-# Both images are read from $FSLDIR/data/atlases/JHU: the label image is FSL's,
-# and the FA template is the app's own copy from templates/, which the container
-# installs there in place of FSL's. template_fa and atlas override either.
+# The FA template is the app's own, from templates/, so that the registration
+# target is the same image however the app is run and whatever FSL release is
+# installed; the label image is FSL's, read from $FSLDIR/data/atlases/JHU.
+# template_fa and atlas override either.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 source "$WORK_DIR/state.sh"
@@ -18,15 +19,14 @@ REG="$WORK_DIR/reg"
 mkdir -p "$REG"
 
 TEMPLATE_FA="$(cfg_path template_fa)"
-[ -n "$TEMPLATE_FA" ] || TEMPLATE_FA="$JHU_DIR/JHU-ICBM-FA-1mm.nii.gz"
+[ -n "$TEMPLATE_FA" ] || TEMPLATE_FA="$TEMPLATE_DIR/JHU-ICBM-FA-1mm.nii.gz"
 ATLAS="$(cfg_path atlas)"
 [ -n "$ATLAS" ] || ATLAS="$JHU_DIR/JHU-ICBM-labels-1mm.nii.gz"
 ATLAS_LABELS="$(cfg_path atlas_labels)"
 [ -n "$ATLAS_LABELS" ] || ATLAS_LABELS="$TEMPLATE_DIR/JHU-ICBM-labels.json"
 
-ATLAS_HINT="it ships with FSL under \$FSLDIR/data/atlases/JHU; set FSLDIR, or name the file with the 'template_fa' / 'atlas' config key"
-[ -f "$TEMPLATE_FA" ] || die "template FA not found at $TEMPLATE_FA -- $ATLAS_HINT"
-[ -f "$ATLAS" ]       || die "atlas not found at $ATLAS -- $ATLAS_HINT"
+[ -f "$TEMPLATE_FA" ] || die "template FA not found at $TEMPLATE_FA -- it ships with this app under templates/; name another with the 'template_fa' config key"
+[ -f "$ATLAS" ]       || die "atlas not found at $ATLAS -- it ships with FSL under \$FSLDIR/data/atlases/JHU; set FSLDIR, or name the file with the 'atlas' config key"
 [ -f "$ATLAS_LABELS" ] || die "atlas label metadata not found at $ATLAS_LABELS"
 
 PREFIX="$REG/template_to_native"
