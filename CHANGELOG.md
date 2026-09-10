@@ -23,6 +23,12 @@ reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction.
   rather than assumed and a non-uniform grouping is an error instead of a
   silently wrong file. A reference Philips 84-slice specification ships in
   `templates/`.
+- Every acquired slice is kept, whatever the slice count. topup defaults to
+  `b02b0_1.cnf`, which does not sub-sample and so places no constraint on the
+  matrix size; sub-sampling affects only topup's speed, and `topup_config`
+  selects a faster schedule where the dimensions allow it. Cropping a slice to
+  make the count even is not done, following FSL's guidance that it destroys
+  the multiband structure `eddy` needs for slice-to-volume correction.
 - `eddy` selects a CUDA build when one is installed, whatever it is called, and
   falls back to a CPU build — without slice-to-volume correction — when there is
   none. Which happened is recorded in the summary.
@@ -74,7 +80,7 @@ reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction.
   and the container runtime injects it at `--gpus` / `--nv` time. Everything
   else is executed and fails on a missing executable or a dynamic-linker error,
   which is what over-pruning actually produces and what `command -v` cannot
-  detect. Also verifies topup's `b02b0.cnf`, the JHU atlas files, and a NIfTI
+  detect. Also verifies topup's config files, the JHU atlas files, and a NIfTI
   round trip through FSL and MRtrix3.
 - The build fails when the FSL release ships no `eddy_cuda` binary, rather than
   producing an image that silently skips slice-to-volume correction. Build with

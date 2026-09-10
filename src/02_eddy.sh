@@ -69,18 +69,13 @@ fi
 if is_true "$USE_S2V"; then
     MPORDER="$(cfg eddy_mporder 6)"
     if [ -n "$SLSPEC" ]; then
+        # Always the measured slspec, never eddy's --mb shorthand: --mb assumes a
+        # uniform multiband pattern, while the slspec is the grouping actually
+        # read from the slice timings.
         log "slice-to-volume correction with an explicit slspec"
         EDDY_ARGS+=(--mporder="$MPORDER"
                     --s2v_niter="$(cfg eddy_s2v_niter 6)"
                     --slspec="$SLSPEC")
-    elif [ -n "$MB_FACTOR" ]; then
-        # A slice was cropped, so the slspec rows no longer line up; describe the
-        # same interleave with --mb and the offset of the dropped slice.
-        if [ "$SLICE_DROPPED" = bottom ]; then MB_OFFS=-1; else MB_OFFS=1; fi
-        log "slice-to-volume correction with --mb $MB_FACTOR --mb_offs $MB_OFFS"
-        EDDY_ARGS+=(--mporder="$MPORDER"
-                    --s2v_niter="$(cfg eddy_s2v_niter 6)"
-                    --mb="$MB_FACTOR" --mb_offs="$MB_OFFS")
     else
         warn "no slice timing information -- running volume-to-volume correction only"
         USE_S2V=false

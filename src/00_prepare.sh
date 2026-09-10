@@ -55,29 +55,13 @@ fslmerge -t "$MERGED" "$DWI" "$RDWI"
 NVOL_TOTAL=$(( NVOL_FWD + NVOL_REV ))
 log "merged series: $NVOL_TOTAL volumes"
 
-# --------------------------------------------------- odd slice handling ----
-# topup's default subsampling schedule halves the matrix, so an odd slice count
-# makes it fail.  One slice is cropped off and eddy is told about the resulting
-# slice-order shift via --mb/--mb_offs.
-DROP_ODD_SLICE="$(cfg_bool remove_odd_slice true)"
-REMOVE_BOTTOM="$(cfg_bool remove_bottom_slice true)"
-SLICE_DROPPED=none
-
-if [ $(( NSLICE % 2 )) -ne 0 ] && is_true "$DROP_ODD_SLICE"; then
-    CROPPED="$RAW/dwi_merged_cropped.nii.gz"
-    if is_true "$REMOVE_BOTTOM"; then
-        log "odd slice count ($NSLICE) -- dropping the bottom slice"
-        fslroi "$MERGED" "$CROPPED" 0 -1 0 -1 1 -1 0 -1
-        SLICE_DROPPED=bottom
-    else
-        log "odd slice count ($NSLICE) -- dropping the top slice"
-        fslroi "$MERGED" "$CROPPED" 0 -1 0 -1 0 $(( NSLICE - 1 )) 0 -1
-        SLICE_DROPPED=top
-    fi
-    mv "$CROPPED" "$MERGED"
-elif [ $(( NSLICE % 2 )) -ne 0 ]; then
-    warn "slice count is odd ($NSLICE) and remove_odd_slice is false -- topup may fail unless topup_config handles it"
-fi
+# Every slice is kept, whatever the slice count.  topup only requires the matrix
+# to be a multiple of the sub-sampling level in its config, and stage 1 defaults
+# to b02b0_1.cnf, which does not sub-sample -- so an odd slice count needs no
+# cropping.  FSL withdrew the crop-or-duplicate-a-slice advice for exactly this
+# reason: eddy's slice-to-volume correction needs the true multiband structure,
+# and a cropped volume no longer has it.
+# https://fsl.fmrib.ox.ac.uk/fsl/docs/diffusion/topup/users_guide/index.html
 
 # ------------------------------------- acqparams / index / gradient table ----
 PREP_ARGS=(
@@ -115,7 +99,7 @@ if [ -n "$USER_INDEX" ]; then
     cp "$USER_INDEX" "$PREP/index.txt"
 fi
 
-# ----------------------------------------------------------- slspec / mb ----
+# -------------------------------------------------------------- slspec ----
 USER_SLSPEC="$(cfg_path slspec)"
 SLSPEC=""
 MB_FACTOR=""
@@ -125,23 +109,18 @@ if [ -n "$USER_SLSPEC" ]; then
     cp "$USER_SLSPEC" "$PREP/slspec.txt"
     SLSPEC="$PREP/slspec.txt"
     MB_FACTOR="$(awk 'NF{print NF; exit}' "$SLSPEC")"
+    log "multiband factor $MB_FACTOR ($(grep -c '[^[:space:]]' "$SLSPEC") excitations)"
 elif [ -n "$DWI_JSON" ]; then
     if python3 "$APP_DIR/python/make_slspec.py" --json "$DWI_JSON" \
             --out "$PREP/slspec.txt" --mb-out "$PREP/mb.txt" --n-slices "$NSLICE"; then
         SLSPEC="$PREP/slspec.txt"
         MB_FACTOR="$(cat "$PREP/mb.txt")"
+        log "multiband factor $MB_FACTOR derived from the slice timings"
     else
         warn "could not derive a slspec from $DWI_JSON -- slice-to-volume correction will be disabled"
     fi
 else
     warn "no dwi_json supplied -- slice-to-volume correction will be disabled"
-fi
-
-# A cropped volume no longer matches the slspec rows (one row would be short),
-# so fall back to eddy's --mb/--mb_offs description of the same slice order.
-if [ "$SLICE_DROPPED" != none ] && [ -n "$MB_FACTOR" ]; then
-    log "a slice was cropped -- describing the slice order with --mb $MB_FACTOR instead of --slspec"
-    SLSPEC=""
 fi
 
 # --------------------------------------------------- denoise and degibbs ----
@@ -174,12 +153,10 @@ INDEX_FILE="$PREP/index.txt"
 MERGED_BVALS="$PREP/merged.bvals"
 MERGED_BVECS="$PREP/merged.bvecs"
 SLSPEC="$SLSPEC"
-MB_FACTOR="$MB_FACTOR"
-SLICE_DROPPED="$SLICE_DROPPED"
 NVOL_TOTAL=$NVOL_TOTAL
 NVOL_FWD=$NVOL_FWD
 NVOL_REV=$NVOL_REV
-NSLICE_ORIGINAL=$NSLICE
+NSLICE=$NSLICE
 HAS_REVERSE_PE=$([ -n "$RDWI" ] && echo true || echo false)
 EOSTATE
 

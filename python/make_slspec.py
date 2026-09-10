@@ -99,25 +99,6 @@ def build_slspec(slice_times: Sequence[float]) -> Tuple[List[List[int]], int]:
     return groups, multiband_factor
 
 
-def drop_slice(rows: List[List[int]], dropped: int, n_slices: int) -> List[List[int]]:
-    """Renumber a slspec after one slice was cropped off the volume.
-
-    ``dropped`` is the 0-based index of the removed slice.  Slices above it move
-    down by one; the row that held the removed slice loses one column, which
-    ``eddy`` rejects, so the caller is expected to fall back to ``--mb``/
-    ``--mb_offs`` in that situation.  Kept here so the renumbering is available
-    and testable.
-    """
-    if not 0 <= dropped < n_slices:
-        raise SlspecError(f"dropped slice {dropped} outside 0..{n_slices - 1}")
-    out = []
-    for row in rows:
-        new_row = [s - 1 if s > dropped else s for s in row if s != dropped]
-        if new_row:
-            out.append(new_row)
-    return out
-
-
 def format_slspec(rows: Sequence[Sequence[int]]) -> str:
     return "\n".join(" ".join("%3d" % s for s in row) for row in rows) + "\n"
 

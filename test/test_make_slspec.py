@@ -71,12 +71,6 @@ class TestReadSliceTimes(unittest.TestCase):
             ms.read_slice_times({"RepetitionTime": 2.0})
 
 
-class TestDropSlice(unittest.TestCase):
-    def test_renumbers_slices_above_the_dropped_one(self):
-        rows = [[0, 2], [1, 3]]
-        self.assertEqual(ms.drop_slice(rows, 0, 4), [[1], [0, 2]])
-
-
 class TestCli(unittest.TestCase):
     def test_slice_count_mismatch_is_fatal(self):
         with tempfile.TemporaryDirectory() as tmp:

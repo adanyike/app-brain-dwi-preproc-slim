@@ -95,8 +95,11 @@ for tool in fslval fslroi fslmerge fslmaths bet topup dtifit; do
     check_runs "$tool"
 done
 # topup reads its configuration from $FSLDIR/etc/flirtsch at run time, so the
-# binary being present is not enough.
-check_file "topup b02b0.cnf config" "${FSLDIR:-/opt/fsl}/etc/flirtsch/b02b0.cnf"
+# binary being present is not enough.  b02b0_1.cnf is the app's default; the
+# sub-sampling variants are there for anyone who sets topup_config.
+for cnf in b02b0_1.cnf b02b0.cnf; do
+    check_file "topup $cnf config" "${FSLDIR:-/opt/fsl}/etc/flirtsch/$cnf"
+done
 
 # Stage 4 registers to FSL's JHU ICBM-DTI-81 data, and the prune deletes every
 # other atlas -- so check that these three came through it.

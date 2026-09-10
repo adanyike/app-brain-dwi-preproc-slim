@@ -43,12 +43,17 @@ acq_rows="$(grep -c '[^[:space:]]' "$ACQPARAMS")"
     die "acqparams.txt has $acq_rows rows but $B0_MERGED has ${#b0_files[@]} volumes"
 
 if [ "$HAS_REVERSE_PE" = true ]; then
-    TOPUP_CONFIG="$(cfg topup_config b02b0.cnf)"
-    # Estimate movement for the first two levels only, use the
-    # scaled-conjugate-gradient minimiser after that, and never subsample:
-    # brain data at this resolution converges fine and subsampling costs
-    # accuracy.
-    TOPUP_EXTRA="$(cfg topup_extra '--estmov=1,1,0,0,0,0,0,0,0 --minmet=0,0,1,1,1,1,1,1,1 --subsamp=1,1,1,1,1,1,1,1,1')"
+    # b02b0_1.cnf is FSL's no-sub-sampling variant of b02b0.cnf.  Sub-sampling
+    # only buys speed -- FSL states the results are very close to identical --
+    # and it constrains the matrix to be a multiple of the sub-sampling level,
+    # which is what used to force a slice to be cropped off odd-slice data.
+    # Set topup_config to b02b0.cnf (or b02b0_4.cnf) for the faster schedules,
+    # but only when every dimension divides by 2 (or 4).
+    TOPUP_CONFIG="$(cfg topup_config b02b0_1.cnf)"
+    # Estimate movement for the first two levels only, and use the
+    # scaled-conjugate-gradient minimiser after that.  The entry counts here
+    # must match the number of levels in topup_config.
+    TOPUP_EXTRA="$(cfg topup_extra '--estmov=1,1,0,0,0,0,0,0,0 --minmet=0,0,1,1,1,1,1,1,1')"
 
     log "running topup (config $TOPUP_CONFIG)"
     # TOPUP_EXTRA is a deliberate argument list, so word splitting is wanted here.

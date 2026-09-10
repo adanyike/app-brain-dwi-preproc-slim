@@ -87,11 +87,22 @@ check "product reports s2v"     bash -c '[ "$(jq -r .provenance.slice_to_volume_
 check "slspec published to qc"  test -s "$SCEN/output/qc/slspec.txt"
 
 # ---------------------------------------------------------------------------
+# An odd slice count is no longer special: nothing is cropped, so the measured
+# slspec still describes the volume and slice-to-volume correction is unaffected.
 scenario "3-odd-slices" "$ROOT/bin-gpu" '{"eddy_binary":"eddy_cuda10.2"}' --slices 15 --multiband 3
-check "a slice was cropped"     grep -q "dropping the bottom slice" "$SCEN/log.txt"
-check "multiband factor used instead of slspec" grep -q -- "--mb=3" <<< "$(eddy_cmd)"
-check "offset marks the dropped bottom slice"   grep -q -- "--mb_offs=-1" <<< "$(eddy_cmd)"
-check "no slspec passed"        bash -c '! grep -q -- "--slspec" <<< "$(cat "'"$SCEN"'"/work/eddy/eddy_corrected.eddy_command_txt)"'
+check "every slice kept"        bash -c '
+    python3 -c "
+import sys, nibabel as nib
+sys.exit(0 if nib.load(sys.argv[1]).shape[2] == 15 else 1)" \
+    "'"$SCEN"'/output/dwi/dwi.nii.gz"'
+check "nothing was cropped"     bash -c '! grep -qi "dropping the .* slice" "'"$SCEN"'/log.txt"'
+check "slspec passed, not --mb" bash -c '
+    cmd="$(cat "'"$SCEN"'"/work/eddy/eddy_corrected.eddy_command_txt)"
+    grep -q -- "--slspec=" <<< "$cmd" && ! grep -q -- "--mb=" <<< "$cmd"'
+check "slspec covers all 15 slices" bash -c '
+    [ "$(tr -s "[:space:]" "\n" < "'"$SCEN"'/output/qc/slspec.txt" | grep -c .)" = "15" ]'
+check "five excitations of three" bash -c '
+    [ "$(grep -c "[^[:space:]]" "'"$SCEN"'/output/qc/slspec.txt")" = "5" ]'
 check "still slice-to-volume"   grep -q -- "--mporder=6" <<< "$(eddy_cmd)"
 
 # ---------------------------------------------------------------------------

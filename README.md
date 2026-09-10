@@ -38,6 +38,15 @@ Two details worth knowing, because they are derived rather than assumed:
   factor is measured rather than assumed; a non-uniform grouping is reported as
   an error instead of producing a silently wrong file.
 
+Every acquired slice is kept, whatever the slice count. topup only constrains
+the matrix size when its config sub-samples, and the default `b02b0_1.cnf` does
+not, so there is no reason to crop or duplicate a slice to make the count even —
+[FSL withdrew that advice](https://fsl.fmrib.ox.ac.uk/fsl/docs/diffusion/topup/users_guide/index.html)
+because a cropped volume no longer carries the multiband structure `eddy` needs
+for slice-to-volume correction. Sub-sampling only affects topup's speed, not its
+result, so `topup_config` is the knob if you want the faster schedule and your
+dimensions allow it.
+
 ## Inputs
 
 | Input | Datatype | Required |
@@ -90,6 +99,7 @@ Every parameter is optional.
 | `eddy_niter` / `eddy_fwhm` | `6` / `10,6,0,0,0,0` | Eddy iterations and per-iteration smoothing |
 | `require_gpu` | `false` | `true` fails when no GPU is visible; `false` falls back to a CPU eddy and skips slice-to-volume correction |
 | `biascorrect` | `ants` | B1 bias correction: `ants`, `fsl` or `none` |
+| `topup_config` | `b02b0_1.cnf` | FSL topup schedule. The default does not sub-sample, so any matrix size works; `b02b0.cnf` / `b02b0_4.cnf` are faster but need every dimension divisible by 2 / 4 |
 | `atlas_registration` | `true` | Set false to stop after preprocessing and the tensor fit |
 | `atlas_interpolation` | `MultiLabel` | Interpolation used when warping atlas labels |
 | `template_fa` / `atlas` | FSL's JHU data | Override the FA template and label image the atlas stage uses |
