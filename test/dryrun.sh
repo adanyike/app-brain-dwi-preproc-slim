@@ -347,6 +347,7 @@ check "what was published is what was supplied" \
     cmp -s "$SCEN2/slspec.txt" "$SCEN2/output/qc/slspec.txt"
 
 # --- a slspec from a different protocol is refused, not handed to eddy ---
+printf '\n--- a slspec from another protocol is refused ---\n'
 SCEN3="$ROOT/15b-wrong-slspec"
 cp -r "$SCEN" "$SCEN3"
 rm -rf "$SCEN3/work" "$SCEN3/output"
