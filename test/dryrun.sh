@@ -362,6 +362,47 @@ check "the refusal says what is wrong" \
 check "it stops before eddy ran" bash -c '
     [ ! -e "'"$SCEN3"'/work/eddy/eddy_corrected.eddy_command_txt" ]'
 
+# ------------------------------------------------ declared slice order ----
+# The Philips case: the sidecar carries no timings, so the excitation order is
+# declared from the protocol instead.  make_test_data.py writes a step-2
+# interleave, so "interleaved" is the truthful declaration for this data.
+printf '\n--- a declared slice order, with no SliceTiming to derive from ---\n'
+SCEN="$ROOT/16-declared-order"
+mkdir -p "$SCEN"
+python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
+for j in "$SCEN"/input/*/dwi.json; do
+    jq 'del(.SliceTiming)' "$j" > "$j.tmp" && mv "$j.tmp" "$j"
+done
+base_config "$SCEN/input" '{"eddy_binary":"eddy_cuda10.2","slice_order":"interleaved","multiband":2}' \
+    > "$SCEN/config.json"
+( cd "$SCEN" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
+    > "$SCEN/log.txt" 2>&1
+check "pipeline exits 0"        test $? -eq 0
+check "the slspec was generated" grep -q "declared slice order 'interleaved'" "$SCEN/log.txt"
+check "slice-to-volume is back on" grep -q -- "--mporder=6" <<< "$(eddy_cmd)"
+check "slspec passed to eddy"   grep -q -- "--slspec=" <<< "$(eddy_cmd)"
+check "the generated order is the interleave" bash -c '
+    [ "$(head -1 "'"$SCEN"'/output/qc/slspec.txt" | tr -s " " | sed "s/^ *//")" = "0 6" ]'
+
+# With timings present the declaration is checked against them, not trusted.
+scenario "16b-declared-agrees" "$ROOT/bin-gpu" '{"eddy_binary":"eddy_cuda10.2","slice_order":"interleaved","multiband":2}'
+check "the declaration is cross-checked" \
+    grep -q "agrees with the sidecar" "$SCEN/log.txt"
+check "slice-to-volume still enabled" grep -q -- "--mporder=6" <<< "$(eddy_cmd)"
+
+printf '\n--- a declared slice order that contradicts the sidecar ---\n'
+SCEN="$ROOT/16c-declared-conflicts"
+mkdir -p "$SCEN"
+python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
+base_config "$SCEN/input" '{"eddy_binary":"eddy_cuda10.2","slice_order":"ascending","multiband":2}' \
+    > "$SCEN/config.json"
+( cd "$SCEN" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
+    > "$SCEN/log.txt" 2>&1
+check "the contradiction is fatal" test $? -ne 0
+check "it names both orders"    grep -q "does not match the SliceTiming" "$SCEN/log.txt"
+check "it stops before eddy ran" bash -c '
+    [ ! -e "'"$SCEN"'/work/eddy/eddy_corrected.eddy_command_txt" ]'
+
 # ---------------------------------------------------------------------------
 printf '\n--- resume from a later stage ---\n'
 SCEN="$ROOT/1-cpu-appa"

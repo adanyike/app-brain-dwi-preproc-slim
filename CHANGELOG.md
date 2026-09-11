@@ -25,6 +25,13 @@ reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction.
   the same way — wrong slice count, out-of-range or repeated indices, or ragged
   rows are refused rather than passed to `eddy`. An 84-slice, multiband-4
   specification ships in `templates/` as a worked example of the format.
+- Where a sidecar carries no timings at all — some Philips exports — the
+  excitation order can be declared with `slice_order` (`ascending`,
+  `descending`, `interleaved`, `rev_interleaved`, `philips_default`, `step`)
+  plus `multiband`, `slice_packages` and `slice_step`, and the slspec built
+  from it. It is opt-in because it asserts the acquisition rather than
+  measuring it, and where `SliceTiming` is present the declaration is compared
+  against it and a disagreement stops the run.
 - The topup configuration is chosen from the matrix size, since topup requires
   the image size to be a multiple of each sub-sampling level in its config:
   `b02b0_4.cnf` when every dimension divides by 4, `b02b0_2.cnf` when they

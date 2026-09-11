@@ -101,6 +101,7 @@ fi
 
 # -------------------------------------------------------------- slspec ----
 USER_SLSPEC="$(cfg_path slspec)"
+SLICE_ORDER="$(cfg_manual slice_order)"
 SLSPEC=""
 MB_FACTOR=""
 
@@ -134,6 +135,40 @@ if [ -n "$USER_SLSPEC" ]; then
     SLSPEC="$PREP/slspec.txt"
     MB_FACTOR="$(awk 'NF{print NF; exit}' "$SLSPEC")"
     log "multiband factor $MB_FACTOR ($(grep -c '[^[:space:]]' "$SLSPEC") excitations)"
+elif [ -n "$SLICE_ORDER" ]; then
+    # The escape hatch for exports that carry no slice timing at all -- some
+    # Philips data.  This is a declaration about the acquisition, not a
+    # measurement of it, so it only runs when asked for explicitly.
+    GEN_ARGS=(--slice-order "$SLICE_ORDER" --n-slices "$NSLICE"
+              --multiband "$(cfg multiband 1)" --packages "$(cfg slice_packages 1)")
+    SLICE_STEP="$(cfg slice_step "")"
+    [ -n "$SLICE_STEP" ] && GEN_ARGS+=(--slice-step "$SLICE_STEP") || true
+
+    python3 "$APP_DIR/python/make_slspec.py" "${GEN_ARGS[@]}" \
+        --out "$PREP/slspec.txt" --mb-out "$PREP/mb.txt" \
+        || die "could not build a slspec from the declared slice order"
+    SLSPEC="$PREP/slspec.txt"
+    MB_FACTOR="$(cat "$PREP/mb.txt")"
+    log "multiband factor $MB_FACTOR from the declared slice order '$SLICE_ORDER'"
+
+    # Where the sidecar does carry timings, they are the measurement and the
+    # declaration is only a claim about it.  Disagreement means one of the two
+    # is wrong about this acquisition, and running either way would model the
+    # wrong slice timing, so stop and say so.
+    if [ -n "$DWI_JSON" ] && python3 "$APP_DIR/python/make_slspec.py" \
+            --json "$DWI_JSON" --out "$PREP/slspec_from_sidecar.txt" \
+            --n-slices "$NSLICE" >/dev/null 2>&1; then
+        if cmp -s "$PREP/slspec.txt" "$PREP/slspec_from_sidecar.txt"; then
+            log "the declared slice order agrees with the sidecar's SliceTiming"
+        else
+            die "slice_order '$SLICE_ORDER' does not match the SliceTiming in $DWI_JSON.
+    declared: $(tr -s ' ' < "$PREP/slspec.txt" | head -1 | sed 's/^ *//')...
+    sidecar:  $(tr -s ' ' < "$PREP/slspec_from_sidecar.txt" | head -1 | sed 's/^ *//')...
+    The sidecar is a measurement and the declaration is not, so drop
+    'slice_order' to use the sidecar, correct it to match the protocol, or
+    supply a slspec file directly via the 'slspec' input."
+        fi
+    fi
 elif [ -n "$DWI_JSON" ]; then
     if python3 "$APP_DIR/python/make_slspec.py" --json "$DWI_JSON" \
             --out "$PREP/slspec.txt" --mb-out "$PREP/mb.txt" --n-slices "$NSLICE"; then

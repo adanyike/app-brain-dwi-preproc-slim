@@ -71,7 +71,101 @@ class TestReadSliceTimes(unittest.TestCase):
             ms.read_slice_times({"RepetitionTime": 2.0})
 
 
+class TestGenerateSlspec(unittest.TestCase):
+    """The generator builds an slspec from a declared protocol, not from data."""
+
+    def test_reproduces_the_shipped_philips_file(self):
+        """84 slices, multiband 4, plain interleave -- a real acquisition."""
+        rows, multiband = ms.generate_slspec(84, multiband=4, order="interleaved")
+        self.assertEqual(rows, read_slspec(REFERENCE))
+        self.assertEqual(multiband, 4)
+
+    def test_ascending_single_band(self):
+        rows, mb = ms.generate_slspec(4, order="ascending")
+        self.assertEqual(rows, [[0], [1], [2], [3]])
+        self.assertEqual(mb, 1)
+
+    def test_descending_single_band(self):
+        rows, _ = ms.generate_slspec(4, order="descending")
+        self.assertEqual(rows, [[3], [2], [1], [0]])
+
+    def test_interleaved_odd_count(self):
+        rows, _ = ms.generate_slspec(5, order="interleaved")
+        self.assertEqual(rows, [[0], [2], [4], [1], [3]])
+
+    def test_multiband_pairs_slices_half_a_volume_apart(self):
+        rows, mb = ms.generate_slspec(8, multiband=2, order="ascending")
+        self.assertEqual(rows, [[0, 4], [1, 5], [2, 6], [3, 7]])
+        self.assertEqual(mb, 2)
+
+    def test_packages_are_ordered_in_turn(self):
+        rows, _ = ms.generate_slspec(6, packages=2, order="interleaved")
+        # Two packages of three: 0,2,1 within each, the second offset by three.
+        self.assertEqual(rows, [[0], [2], [1], [3], [5], [4]])
+
+    def test_philips_default_uses_a_sqrt_step(self):
+        rows, _ = ms.generate_slspec(9, order="philips_default")
+        self.assertEqual([r[0] for r in rows], [0, 3, 6, 1, 4, 7, 2, 5, 8])
+
+    def test_explicit_step(self):
+        rows, _ = ms.generate_slspec(6, order="step", step=3)
+        self.assertEqual([r[0] for r in rows], [0, 3, 1, 4, 2, 5])
+
+    def test_step_order_needs_a_step(self):
+        with self.assertRaises(ms.SlspecError):
+            ms.generate_slspec(6, order="step")
+
+    def test_slices_must_divide_by_the_multiband_factor(self):
+        with self.assertRaises(ms.SlspecError):
+            ms.generate_slspec(7, multiband=2, order="ascending")
+
+    def test_band_must_divide_into_packages(self):
+        with self.assertRaises(ms.SlspecError):
+            ms.generate_slspec(10, multiband=2, packages=3, order="ascending")
+
+    def test_unknown_order_is_refused(self):
+        with self.assertRaises(ms.SlspecError):
+            ms.generate_slspec(4, order="spiral")
+
+    def test_every_slice_appears_exactly_once(self):
+        for order in ("ascending", "descending", "interleaved",
+                      "rev_interleaved", "philips_default"):
+            rows, _ = ms.generate_slspec(60, multiband=3, packages=2, order=order)
+            flat = sorted(s for row in rows for s in row)
+            self.assertEqual(flat, list(range(60)), order)
+
+
 class TestCli(unittest.TestCase):
+    def test_generate_writes_a_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out, mb = os.path.join(tmp, "s.txt"), os.path.join(tmp, "mb.txt")
+            self.assertEqual(ms.main(["--slice-order", "interleaved",
+                                      "--multiband", "4", "--n-slices", "84",
+                                      "--out", out, "--mb-out", mb]), 0)
+            self.assertEqual(read_slspec(out), read_slspec(REFERENCE))
+            with open(mb) as fh:
+                self.assertEqual(fh.read().strip(), "4")
+
+    def test_generate_needs_a_slice_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ms.SlspecError):
+                ms.main(["--slice-order", "ascending",
+                         "--out", os.path.join(tmp, "s.txt")])
+
+    def test_json_and_slice_order_are_mutually_exclusive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sidecar = os.path.join(tmp, "dwi.json")
+            with open(sidecar, "w") as fh:
+                json.dump({"SliceTiming": [0.0, 0.1]}, fh)
+            with self.assertRaises(ms.SlspecError):
+                ms.main(["--json", sidecar, "--slice-order", "ascending",
+                         "--n-slices", "2", "--out", os.path.join(tmp, "s.txt")])
+
+    def test_one_source_is_required(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ms.SlspecError):
+                ms.main(["--out", os.path.join(tmp, "s.txt")])
+
     def test_slice_count_mismatch_is_fatal(self):
         with tempfile.TemporaryDirectory() as tmp:
             sidecar = os.path.join(tmp, "dwi.json")

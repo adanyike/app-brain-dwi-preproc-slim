@@ -73,7 +73,17 @@ the `eddy` slice specification directly as the `slspec` input: one row per
 excitation, listing the 0-based slices acquired together. A file for an
 84-slice, multiband-4 protocol ships in `templates/` as a worked example of the
 format; it is not a drop-in for other protocols, and a slspec that does not
-describe the acquisition is refused. Given
+describe the acquisition is refused.
+
+Failing both, the excitation order can be **declared** from the protocol with
+`slice_order` (plus `multiband`, `slice_packages`, `slice_step`) and the slspec
+built from it. That is an assertion about the acquisition rather than a
+measurement of it, so it is opt-in, and where the sidecar does carry
+`SliceTiming` the declaration is checked against it and a disagreement stops the
+run. Note that Philips's own `default` scan order interleaves with a step of
+roughly √(slices per package) rather than the step of 2 that `interleaved`
+means — check `philips_default` against your protocol printout, or give
+`slice_step` explicitly. Given
 neither, the app still completes, but corrects motion volume-to-volume only and
 records that in the summary.
 
@@ -106,6 +116,8 @@ Every parameter is optional.
 | `eddy_niter` / `eddy_fwhm` | `6` / `10,6,0,0,0,0` | Eddy iterations and per-iteration smoothing |
 | `require_gpu` | `false` | `true` fails when no GPU is visible; `false` falls back to a CPU eddy and skips slice-to-volume correction |
 | `biascorrect` | `ants` | B1 bias correction: `ants`, `fsl` or `none` |
+| `slice_order` | `auto` | `auto` derives the excitation order from `SliceTiming`. Set `ascending`, `descending`, `interleaved`, `rev_interleaved`, `philips_default` or `step` to declare it from the protocol when the sidecar has no timings |
+| `multiband` / `slice_packages` / `slice_step` | `1` / `1` / — | Protocol parameters used with a declared `slice_order` |
 | `topup_config` | `auto` | FSL topup schedule, chosen from the matrix size: `b02b0_4.cnf`, `b02b0_2.cnf` or `b02b0_1.cnf` as the dimensions divide by 4, 2 or neither. Name one explicitly to override |
 | `atlas_registration` | `true` | Set false to stop after preprocessing and the tensor fit |
 | `atlas_interpolation` | `MultiLabel` | Interpolation used when warping atlas labels |
