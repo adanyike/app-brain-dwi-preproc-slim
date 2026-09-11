@@ -17,6 +17,8 @@
   "session_prefixes": "ses,MR,visit,tp,V",
   "denoise": true,
   "degibbs": true,
+  "acqp": "",
+  "index": "",
   "slice_order": "auto",
   "multiband": 1,
   "slice_packages": 1,

@@ -66,26 +66,28 @@ run is geometrically wrong while being named, shaped and summarised exactly like
 a corrected one, so nothing downstream could tell the two apart if they were
 pooled. Data with no opposing pair needs a different app.
 
-Slice-to-volume correction needs to know the slice acquisition order. Normally
-that is derived from `SliceTiming` in the sidecar. Where the sidecar does not
-carry it — some Philips exports, or a converter that dropped the field — supply
-the `eddy` slice specification directly as the `slspec` input: one row per
-excitation, listing the 0-based slices acquired together. A file for an
-84-slice, multiband-4 protocol ships in `templates/` as a worked example of the
-format; it is not a drop-in for other protocols, and a slspec that does not
-describe the acquisition is refused.
+Slice-to-volume correction needs to know the slice acquisition order, which the
+app resolves from the first of these that is available:
 
-Failing both, the excitation order can be **declared** from the protocol with
-`slice_order` (plus `multiband`, `slice_packages`, `slice_step`) and the slspec
-built from it. That is an assertion about the acquisition rather than a
-measurement of it, so it is opt-in, and where the sidecar does carry
-`SliceTiming` the declaration is checked against it and a disagreement stops the
-run. Note that Philips's own `default` scan order interleaves with a step of
-roughly √(slices per package) rather than the step of 2 that `interleaved`
-means — check `philips_default` against your protocol printout, or give
-`slice_step` explicitly. Given
-neither, the app still completes, but corrects motion volume-to-volume only and
-records that in the summary.
+1. **An `slspec` input file.** One row per excitation, listing the 0-based
+   slices acquired together. A file for an 84-slice, multiband-4 protocol ships
+   in `templates/` as a worked example of the format — it is not a drop-in for
+   other protocols, and a slspec that does not describe the acquisition (wrong
+   slice count, out-of-range or repeated indices, ragged rows) is refused rather
+   than passed to `eddy`.
+2. **A declared `slice_order`**, plus `multiband`, `slice_packages` and
+   `slice_step` as the protocol requires. This is for sidecars that carry no
+   timings at all — some Philips exports, or a converter that dropped the field.
+   It asserts the acquisition rather than measuring it, so it is opt-in; where
+   the sidecar does carry `SliceTiming`, the declaration is checked against it
+   and a disagreement stops the run. Note that Philips's own `default` scan
+   order interleaves with a step of roughly √(slices per package) rather than
+   the step of 2 that `interleaved` means, so check `philips_default` against
+   your protocol printout or give `slice_step` explicitly.
+3. **`SliceTiming` in the sidecar**, the usual case, needing no configuration.
+
+Given none of the three the app still completes, but corrects motion
+volume-to-volume only and records that in the summary.
 
 ## Outputs
 
@@ -116,8 +118,9 @@ Every parameter is optional.
 | `eddy_niter` / `eddy_fwhm` | `6` / `10,6,0,0,0,0` | Eddy iterations and per-iteration smoothing |
 | `require_gpu` | `false` | `true` fails when no GPU is visible; `false` falls back to a CPU eddy and skips slice-to-volume correction |
 | `biascorrect` | `ants` | B1 bias correction: `ants`, `fsl` or `none` |
-| `slice_order` | `auto` | `auto` derives the excitation order from `SliceTiming`. Set `ascending`, `descending`, `interleaved`, `rev_interleaved`, `philips_default` or `step` to declare it from the protocol when the sidecar has no timings |
+| `slice_order` | `auto` | How the `eddy` slice specification is obtained when no `slspec` **input** is given (that file wins if present). `auto` derives it from `SliceTiming`; `ascending`, `descending`, `interleaved`, `rev_interleaved`, `philips_default` or `step` declare it from the protocol instead, for sidecars carrying no timings |
 | `multiband` / `slice_packages` / `slice_step` | `1` / `1` / — | Protocol parameters used with a declared `slice_order` |
+| `acqp` / `index` | derived | Supply `acqparams.txt` / `index.txt` directly, replacing the values derived from the sidecars. For datasets whose sidecars are incomplete |
 | `topup_config` | `auto` | FSL topup schedule, chosen from the matrix size: `b02b0_4.cnf`, `b02b0_2.cnf` or `b02b0_1.cnf` as the dimensions divide by 4, 2 or neither. Name one explicitly to override |
 | `atlas_registration` | `true` | Set false to stop after preprocessing and the tensor fit |
 | `atlas_interpolation` | `MultiLabel` | Interpolation used when warping atlas labels |

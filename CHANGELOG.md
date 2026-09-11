@@ -32,6 +32,8 @@ reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction.
   from it. It is opt-in because it asserts the acquisition rather than
   measuring it, and where `SliceTiming` is present the declaration is compared
   against it and a disagreement stops the run.
+- `acqp` and `index` accept a hand-made `acqparams.txt` / `index.txt` in place
+  of the derived ones, for datasets whose sidecars are incomplete.
 - The topup configuration is chosen from the matrix size, since topup requires
   the image size to be a multiple of each sub-sampling level in its config:
   `b02b0_4.cnf` when every dimension divides by 4, `b02b0_2.cnf` when they
