@@ -21,8 +21,10 @@ reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction.
 - `slspec` is derived from `SliceTiming` (or Siemens `MosaicRefAcqTimes`) by
   grouping slices on acquisition time, so the multiband factor is measured
   rather than assumed and a non-uniform grouping is an error instead of a
-  silently wrong file. A reference Philips 84-slice specification ships in
-  `templates/`.
+  silently wrong file. A supplied `slspec` is checked against the acquisition
+  the same way — wrong slice count, out-of-range or repeated indices, or ragged
+  rows are refused rather than passed to `eddy`. An 84-slice, multiband-4
+  specification ships in `templates/` as a worked example of the format.
 - The topup configuration is chosen from the matrix size, since topup requires
   the image size to be a multiple of each sub-sampling level in its config:
   `b02b0_4.cnf` when every dimension divides by 4, `b02b0_2.cnf` when they

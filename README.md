@@ -70,8 +70,10 @@ Slice-to-volume correction needs to know the slice acquisition order. Normally
 that is derived from `SliceTiming` in the sidecar. Where the sidecar does not
 carry it — some Philips exports, or a converter that dropped the field — supply
 the `eddy` slice specification directly as the `slspec` input: one row per
-excitation, listing the 0-based slices acquired together. A file for a Philips
-84-slice, multiband-3 protocol ships in `templates/` as a worked example. Given
+excitation, listing the 0-based slices acquired together. A file for an
+84-slice, multiband-4 protocol ships in `templates/` as a worked example of the
+format; it is not a drop-in for other protocols, and a slspec that does not
+describe the acquisition is refused. Given
 neither, the app still completes, but corrects motion volume-to-volume only and
 records that in the summary.
 

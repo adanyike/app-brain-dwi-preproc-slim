@@ -106,6 +106,30 @@ MB_FACTOR=""
 
 if [ -n "$USER_SLSPEC" ]; then
     log "using the supplied slspec file"
+    # A supplied slspec is taken entirely on trust, and the easy mistake is to
+    # reuse one from a different protocol -- eddy would then model the slice
+    # timing of an acquisition this is not.  A derived slspec is checked against
+    # the slice count (make_slspec.py --n-slices); check a supplied one too.
+    SLSPEC_PROBLEM="$(awk -v n="$NSLICE" '
+        NF == 0 { next }
+        width == 0 { width = NF }
+        {
+            if (NF != width) {
+                printf "row %d lists %d slice(s) but the first row lists %d\n", NR, NF, width
+                bad = 1; exit 1
+            }
+            for (i = 1; i <= NF; i++) {
+                if ($i !~ /^[0-9]+$/) { printf "entry %s is not a 0-based slice index\n", $i; bad = 1; exit 1 }
+                if ($i + 0 >= n)      { printf "slice %s is outside 0..%d\n", $i, n - 1; bad = 1; exit 1 }
+                if (seen[$i + 0]++)   { printf "slice %s appears more than once\n", $i; bad = 1; exit 1 }
+                total++
+            }
+        }
+        END {
+            if (bad) exit 1
+            if (total != n) { printf "covers %d slice(s) but the data has %d\n", total, n; exit 1 }
+        }' "$USER_SLSPEC")" || \
+        die "the supplied slspec does not describe this acquisition ($NSLICE slices): $SLSPEC_PROBLEM"
     cp "$USER_SLSPEC" "$PREP/slspec.txt"
     SLSPEC="$PREP/slspec.txt"
     MB_FACTOR="$(awk 'NF{print NF; exit}' "$SLSPEC")"

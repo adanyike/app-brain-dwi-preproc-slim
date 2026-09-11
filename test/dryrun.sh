@@ -346,6 +346,21 @@ check "slice-to-volume enabled" bash -c '
 check "what was published is what was supplied" \
     cmp -s "$SCEN2/slspec.txt" "$SCEN2/output/qc/slspec.txt"
 
+# --- a slspec from a different protocol is refused, not handed to eddy ---
+SCEN3="$ROOT/15b-wrong-slspec"
+cp -r "$SCEN" "$SCEN3"
+rm -rf "$SCEN3/work" "$SCEN3/output"
+# The shipped 84-slice example against 12-slice data: the realistic misuse.
+cp "$APP/templates/philips_84_slices_slspec.txt" "$SCEN3/slspec.txt"
+jq --arg s "$SCEN3/slspec.txt" '.slspec = $s' "$SCEN/config.json" > "$SCEN3/config.json"
+( cd "$SCEN3" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
+    > "$SCEN3/log.txt" 2>&1
+check "a mismatched slspec is refused" test $? -ne 0
+check "the refusal says what is wrong" \
+    grep -q "does not describe this acquisition" "$SCEN3/log.txt"
+check "it stops before eddy ran" bash -c '
+    [ ! -e "'"$SCEN3"'/work/eddy/eddy_corrected.eddy_command_txt" ]'
+
 # ---------------------------------------------------------------------------
 printf '\n--- resume from a later stage ---\n'
 SCEN="$ROOT/1-cpu-appa"
