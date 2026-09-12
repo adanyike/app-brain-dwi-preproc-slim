@@ -626,6 +626,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                        "signature_hash": chosen["signature_hash"],
                        "n_subjects": chosen["n_subjects"],
                        "subjects": chosen["subjects"],
+                       # "the largest cohort" is only meaningful when it *is*
+                       # larger. On a tie the pick is deterministic but
+                       # arbitrary, and a reader would take the report to
+                       # describe the majority of the study.
+                       "tied_with": [c["signature_hash"] for c in cohorts
+                                     if c["signature"] != chosen["signature"]
+                                     and c["n_subjects"] == chosen["n_subjects"]],
                        "protocol": chosen["members"][0]["protocol"],
                        "eddy_flags": chosen["members"][0]["eddy_flags"]},
             "cohorts": [{k: c[k] for k in ("signature", "signature_hash",

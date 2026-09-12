@@ -139,6 +139,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "labels on the figures below may not line up."
             % (pooled, chosen["n_subjects"])})
 
+    tied = chosen.get("tied_with") or []
+    if tied:
+        messages.append({"type": "warning", "msg":
+            "This cohort is no larger than %d other cohort(s) (%s), so which one "
+            "was reported on was decided arbitrarily, not by weight of numbers. "
+            "Set 'cohort' to a signature to choose deliberately."
+            % (len(tied), ", ".join(tied))})
+
     for excluded in cohorts.get("excluded", []):
         messages.append({"type": "warning", "msg":
             "Excluded %d subject(s) (%s): %s. eddy_squad can only pool subjects "

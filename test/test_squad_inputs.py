@@ -304,6 +304,15 @@ class TestCohorts(StagingCase):
                    self.dataset("b", qc(data_no_shells=1), summary={"subject": "b"})]
         report = self.run_staging(self.config(folders), min_subjects=1)
         self.assertEqual(report["chosen"]["n_subjects"], 1)
+        # Two cohorts of one: the pick was arbitrary and must say so.
+        self.assertEqual(len(report["chosen"]["tied_with"]), 1)
+
+    def test_a_genuinely_larger_cohort_is_not_marked_as_tied(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"}),
+                   self.dataset("c", qc(data_no_shells=1), summary={"subject": "c"})]
+        report = self.run_staging(self.config(folders))
+        self.assertEqual(report["chosen"]["tied_with"], [])
 
     def test_a_named_cohort_can_be_selected(self):
         report = self.run_staging(self.config(self.heterogeneous()))

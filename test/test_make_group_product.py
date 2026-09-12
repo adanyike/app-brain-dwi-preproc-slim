@@ -131,6 +131,17 @@ class TestMessages(unittest.TestCase):
                       "(sub-02)", warnings)
         self.assertIn("still in the study-wise report", warnings)
 
+    def test_an_arbitrary_cohort_choice_is_declared(self):
+        cohorts = dict(COHORTS)
+        cohorts["chosen"] = dict(COHORTS["chosen"], tied_with=["def67890"])
+        warnings = " ".join(messages(build(cohorts=cohorts, db=GROUP_DB), "warning"))
+        self.assertIn("no larger than 1 other cohort", warnings)
+        self.assertIn("decided arbitrarily", warnings)
+
+    def test_a_majority_cohort_is_not_called_arbitrary(self):
+        warnings = " ".join(messages(build(db=GROUP_DB), "warning"))
+        self.assertNotIn("decided arbitrarily", warnings)
+
     def test_a_subject_count_mismatch_is_flagged(self):
         warnings = " ".join(messages(build(db=dict(GROUP_DB, data_no_subjects=2)),
                                      "warning"))
