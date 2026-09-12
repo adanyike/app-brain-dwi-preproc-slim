@@ -435,6 +435,15 @@ def cmd_eddy_squad(argv):
         fh.write("%%PDF-1.4 stub group report for %d subjects\n" % len(databases))
 
     if "-u" in flags or "--update" in flags:
+        # FSL 6.0.7.x reaches this point, having already written the group
+        # database, and then dies inside its own report code: squad_update
+        # passes an empty list where ref_page expects the eddy parameters. The
+        # group report is fine and the update is impossible, which is a
+        # different thing from the whole run failing.
+        if os.environ.get("STUB_SQUAD_UPDATE_FAIL"):
+            sys.exit("Updating single subject reports...\nTraceback (most recent "
+                     "call last):\n  File \"ref_page.py\", line 50, in main\n"
+                     "AttributeError: 'list' object has no attribute 'MethodsText'")
         for folder in folders:
             with open(os.path.join(folder, "qc_updated.pdf"), "w") as fh:
                 fh.write("%PDF-1.4 stub updated report\n")

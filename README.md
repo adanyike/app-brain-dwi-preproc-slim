@@ -138,6 +138,14 @@ When either is missing the update alone is skipped — naming the subject or the
 module — rather than losing the group report, which is what `eddy_squad` would
 do on its own.
 
+**FSL 6.0.7.x cannot update single-subject reports at all.** Its `squad_update`
+passes an empty list where `ref_page` expects the eddy parameters, so the step
+dies with `AttributeError: 'list' object has no attribute 'MethodsText'` — after
+the group database has been written. The App notices that the group report
+already exists, re-runs without `--update`, and publishes it; the log says what
+happened. Set `update_single_subject_reports` to false on those builds to skip
+the wasted attempt.
+
 ### Cohorts, and why a group run can refuse
 
 `eddy_squad` pools subjects only when `eddy` was run with the same features for

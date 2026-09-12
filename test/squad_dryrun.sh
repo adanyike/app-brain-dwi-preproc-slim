@@ -350,6 +350,33 @@ check "the update was skipped" grep -q "not updating the single-subject reports"
 check "the missing module is named" grep -q "PyPDF2" "$SCEN3/log.txt"
 check "and the group database is there" test -s "$SCEN3/output/squad/group_db.json"
 
+# --- the update step dying after the group report is not a failed run ---
+# FSL 6.0.7.x always fails here (ref_page gets an empty list where it wants the
+# eddy parameters), so a task that treated it as fatal would throw away a
+# perfectly good study-wise report.
+SCEN4="$ROOT/3e-update-step-crashes"
+mkdir -p "$SCEN4"
+cp -r "$SCEN/input" "$SCEN4/input"
+cp "$SCEN/participants.tsv" "$SCEN4/participants.tsv"
+group_config "$SCEN4/config.json" \
+    "$(jq -n --arg v "$SCEN4/participants.tsv" \
+        '{grouping_variable: $v, update_single_subject_reports: true}')" \
+    "$SCEN4"/input/sub-0*
+( cd "$SCEN4" && PATH="$BIN:$PATH" APP_DIR="$APP" STUB_SQUAD_UPDATE_FAIL=1 \
+    bash "$APP/run_squad.sh" ) > "$SCEN4/log.txt" 2>&1
+check "a crash in the update step does not fail the task" test $? -eq 0
+check "the group report is still published" test -s "$SCEN4/output/squad/group_qc.pdf"
+check "and the group database" test -s "$SCEN4/output/squad/group_db.json"
+check "the retry is announced with the upstream error" \
+    grep -q "failed updating the single-subject reports" "$SCEN4/log.txt"
+check "the upstream message is quoted" grep -q "MethodsText" "$SCEN4/log.txt"
+check "it re-ran without --update" bash -c '
+    [ "$(grep -c "running: eddy_squad" "'"$SCEN4"'/log.txt")" = "2" ]'
+check "no updated reports are published" bash -c '
+    [ -z "$(ls "'"$SCEN4"'"/output/squad/updated 2>/dev/null)" ]'
+check "the task page still reports the cohort" bash -c '
+    jq -r ".brainlife[].msg // empty" "'"$SCEN4"'/product.json" | grep -q "Pooled 4 subject"'
+
 printf '\n--- 4-unusable-inputs ---\n'
 SCEN="$ROOT/4-unusable"
 mkdir -p "$SCEN/input/empty"

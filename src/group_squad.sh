@@ -52,11 +52,12 @@ rm -rf "$SQUAD_OUT"
 # Order matters: eddy_squad parses with argparse and declares --update as
 # nargs="?", so anything following it is taken as its value. The subject list
 # goes first and --update last, or the list disappears into the update option.
-SQUAD_ARGS=("$LIST_FILE" --output-dir "$SQUAD_OUT")
+SQUAD_BASE_ARGS=("$LIST_FILE" --output-dir "$SQUAD_OUT")
 if [ -n "$VARIABLE_FILE" ] && [ -s "$VARIABLE_FILE" ]; then
     log "grouping variable: $(head -1 "$VARIABLE_FILE") ($(sed -n 2p "$VARIABLE_FILE" | grep -q 1 && echo continuous || echo categorical))"
-    SQUAD_ARGS+=(--grouping "$VARIABLE_FILE")
+    SQUAD_BASE_ARGS+=(--grouping "$VARIABLE_FILE")
 fi
+SQUAD_ARGS=("${SQUAD_BASE_ARGS[@]}")
 
 UPDATE_REPORTS="$(cfg_bool update_single_subject_reports false)"
 if is_true "$UPDATE_REPORTS"; then
@@ -99,9 +100,28 @@ if ! eddy_squad "${SQUAD_ARGS[@]}" 2>&1 | tee "$SQUAD_WORK/eddy_squad.log"; then
     if grep -qi "inconsistency detected" "$SQUAD_WORK/eddy_squad.log"; then
         warn "eddy_squad refused this cohort. Comparing every eddy input field across the staged subjects:"
         python3 "$APP_DIR/python/squad_inputs.py" --diagnose "$LIST_FILE" || true
+        cp "$COHORTS" "$OUT_DIR/squad/cohorts.json" 2>/dev/null || true
+        die "eddy_squad failed; see the log above"
     fi
-    cp "$COHORTS" "$OUT_DIR/squad/cohorts.json" 2>/dev/null || true
-    die "eddy_squad failed; see the log above"
+
+    # The group database is written before the update step runs, so a crash with
+    # that file already on disk means the study-wise report succeeded and the
+    # optional extra did not. FSL 6.0.7.x is known to fail here -- its
+    # squad_update passes an empty list where ref_page expects the eddy
+    # parameters, so `--update` cannot work in those builds at all. Either way
+    # the group report is the deliverable: drop the update and run again.
+    if is_true "$UPDATE_REPORTS" && [ -f "$SQUAD_OUT/group_db.json" ]; then
+        warn "eddy_squad built the group database and then failed updating the single-subject reports ($(tail -1 "$SQUAD_WORK/eddy_squad.log")). Re-running without --update; the study-wise report is unaffected. Unset update_single_subject_reports to skip this attempt in future."
+        UPDATE_REPORTS=false
+        rm -rf "$SQUAD_OUT"
+        log "running: eddy_squad ${SQUAD_BASE_ARGS[*]}"
+        eddy_squad "${SQUAD_BASE_ARGS[@]}" 2>&1 | tee "$SQUAD_WORK/eddy_squad.log" \
+            || { cp "$COHORTS" "$OUT_DIR/squad/cohorts.json" 2>/dev/null || true
+                 die "eddy_squad failed even without --update; see the log above"; }
+    else
+        cp "$COHORTS" "$OUT_DIR/squad/cohorts.json" 2>/dev/null || true
+        die "eddy_squad failed; see the log above"
+    fi
 fi
 
 [ -f "$SQUAD_OUT/group_db.json" ] || die "eddy_squad produced no group_db.json"

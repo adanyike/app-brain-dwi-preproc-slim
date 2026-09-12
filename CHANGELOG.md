@@ -49,6 +49,11 @@
   the system one, which is not what eddy_squad runs under).
 - `product.json` for a group task reports the cohort, the exclusions and the
   per-subject motion, outlier and SNR distributions, worst subject first.
+- A crash in `eddy_squad`'s update step no longer costs the group report. FSL
+  6.0.7.x fails there every time -- `squad_update` hands `ref_page` an empty
+  list where the eddy parameters belong -- and it fails *after* writing the
+  group database, so the study-wise report exists when the traceback appears.
+  The App detects that, re-runs without `--update`, and says so.
 - Subjects processed before any of this existed need no reprocessing: a QUAD
   folder is found under `eddyqc/`, an archived `qc` dataset, an older task's
   `output/qc/eddy_quad/`, or eddy_quad's own `.qc/`, and a subject label is
