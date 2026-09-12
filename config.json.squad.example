@@ -7,7 +7,7 @@
   "grouping_variable": "",
   "variable_name": "group",
   "variable_is_continuous": false,
-  "update_single_subject_reports": false,
+  "update_single_subject_reports": true,
   "require_homogeneous": false,
   "cohort": "",
   "min_subjects": 2

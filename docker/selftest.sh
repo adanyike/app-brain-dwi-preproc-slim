@@ -240,6 +240,23 @@ PYEOF
             echo "  note  PyPDF2 is missing: eddy_squad can build group reports but" >&2
             echo "        cannot update single-subject ones (update_single_subject_reports)" >&2
         fi
+
+        # FSL 6.0.7.x ships an eddy_qc whose update step cannot run: ref_page
+        # calls ec.MethodsText() on the empty list squad_update hands it. The
+        # Dockerfile guards that call, so report which state this image is in --
+        # a note either way, since the group report does not depend on it.
+        CHECKED=$((CHECKED + 1))
+        REF_PAGE="$("$FSL_PYTHON" -c 'import eddy_qc.utils.ref_page as m; print(m.__file__)' 2>/dev/null)"
+        if [ -z "$REF_PAGE" ] || [ ! -f "$REF_PAGE" ]; then
+            echo "  note  eddy_qc.utils.ref_page not found; cannot tell whether --update works" >&2
+        elif grep -q 'hasattr(ec, "MethodsText")' "$REF_PAGE"; then
+            pass "eddy_squad --update is patched for the ref_page bug"
+        elif grep -q 'ec\.MethodsText()' "$REF_PAGE"; then
+            echo "  note  ref_page.py still calls ec.MethodsText() unguarded: eddy_squad" >&2
+            echo "        --update will fail and the group report will be produced without it" >&2
+        else
+            pass "eddy_squad --update needs no patch in this FSL"
+        fi
     fi
 else
     echo "  skip  eddy_squad not installed; this image cannot run group QC"

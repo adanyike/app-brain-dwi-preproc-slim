@@ -54,6 +54,16 @@
   list where the eddy parameters belong -- and it fails *after* writing the
   group database, so the study-wise report exists when the traceback appears.
   The App detects that, re-runs without `--update`, and says so.
+- That upstream bug is now fixed in the image rather than merely survived, so
+  updating the single-subject reports works -- and it is **on by default**
+  (`update_single_subject_reports`, still settable to false). The build guards
+  `ref_page.py`'s `ec.MethodsText()` call with a `hasattr` check, applying the
+  edit only when the unguarded call is present, keeping the original beside it as
+  `ref_page.py.orig`, and importing the module afterwards so a mangled file fails
+  the build instead of someone's task. `docker/selftest.sh` reports which of the
+  three states the image is in. The fallback above stays, because an image built
+  elsewhere, or a future FSL that moves the call, must still publish its group
+  report.
 - Subjects processed before any of this existed need no reprocessing: a QUAD
   folder is found under `eddyqc/`, an archived `qc` dataset, an older task's
   `output/qc/eddy_quad/`, or eddy_quad's own `.qc/`, and a subject label is

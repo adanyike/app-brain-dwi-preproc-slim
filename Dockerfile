@@ -171,6 +171,34 @@ RUN { FSL_PY="${FSLDIR}/bin/python"; \
       "$FSL_PY" -c 'import PyPDF2; print("PyPDF2 " + PyPDF2.__version__ + " importable by FSL python")'; \
     } || echo "WARNING: PyPDF2 is not installed; eddy_squad cannot update single-subject reports" >&2
 
+# FSL 6.0.7.x cannot update single-subject QC reports at all: SQUAD's
+# squad_update calls utils/ref_page.py's main(pdf, data, ec) with an empty list,
+# and ref_page then calls ec.MethodsText() -- so `eddy_squad --update` dies with
+# "AttributeError: 'list' object has no attribute 'MethodsText'" on every run,
+# whatever the data, *after* writing the group database.
+#
+# Guard the two call sites instead of supplying a methods object: at group level
+# there is no single eddy command, so there is nothing truthful to put there.
+# What the patched report loses is one paragraph of descriptive prose on one
+# page; MethodsText() cannot move a QC number.
+#
+# Conditional, so a release that fixes this upstream is left alone; reversible,
+# with the original kept beside it; and verified by importing the module, so a
+# mangled file fails this build rather than somebody's task.
+RUN { FSL_PY="${FSLDIR}/bin/python"; \
+      REF="$("$FSL_PY" -c 'import eddy_qc.utils.ref_page as m; print(m.__file__)')"; \
+      if ! grep -q 'ec\.MethodsText()' "$REF"; then \
+          echo "ref_page.py does not call ec.MethodsText() unguarded; not patching"; \
+      elif grep -q 'hasattr(ec, "MethodsText")' "$REF"; then \
+          echo "ref_page.py is already patched"; \
+      else \
+          cp -p "$REF" "$REF.orig"; \
+          sed -i 's/ec\.MethodsText()/(ec.MethodsText() if hasattr(ec, "MethodsText") else "Methods text is not available when eddy_squad updates a single-subject report.")/g' "$REF"; \
+          "$FSL_PY" -c 'import eddy_qc.utils.ref_page'; \
+          echo "patched $REF for the eddy_squad --update bug (original kept as $REF.orig)"; \
+      fi; \
+    } || echo "WARNING: could not patch ref_page.py; eddy_squad --update will fail and the group report will be produced without it" >&2
+
 # MRtrix3's python drivers (dwibiascorrect and friends) start with
 # `#!/usr/bin/env python`, and Ubuntu 22.04 provides no `python` at all -- only
 # python3.  In this image they resolve to FSL's bundled conda interpreter,

@@ -112,8 +112,40 @@ check "a figure per QC index" bash -c '
 check "subjects are named on the figures" bash -c '
     jq -r ".brainlife[] | select(.type==\"plotly\") | .data[0].x[]" \
         "'"$SCEN"'/product.json" | grep -q "sub-01"'
-check "no single-subject report updated by default" bash -c '
-    [ ! -d "'"$SCEN"'/output/squad/updated" ]'
+check "single-subject reports are updated by default" bash -c '
+    [ "$(ls "'"$SCEN"'"/output/squad/updated/*_qc_updated.pdf 2>/dev/null | wc -l)" = "4" ]'
+check "each updated report is named after its subject" \
+    test -s "$SCEN/output/squad/updated/sub-02_qc_updated.pdf"
+check "the default needed no retry without --update" bash -c '
+    [ "$(grep -c "running: eddy_squad" "'"$SCEN"'/log.txt")" = "1" ]'
+check "the task page reports the updated reports" bash -c '
+    jq -r ".brainlife[].msg // empty" "'"$SCEN"'/product.json" \
+    | grep -q "Updated 4 single-subject report"'
+
+# --- and the default can be turned off ---
+# A study that only wants the group report should not pay for four report
+# rewrites, and should get no stray updated/ directory out of it.
+SCEN1B="$ROOT/1b-update-disabled"
+mkdir -p "$SCEN1B"
+cp -r "$SCEN/input" "$SCEN1B/input"
+group_config "$SCEN1B/config.json" '{"update_single_subject_reports": false}' \
+    "$SCEN1B"/input/sub-0*
+( cd "$SCEN1B" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run_squad.sh" ) \
+    > "$SCEN1B/log.txt" 2>&1
+check "the group report is produced with the update turned off" test $? -eq 0
+check "no updated reports are published" bash -c '
+    [ ! -d "'"$SCEN1B"'/output/squad/updated" ]'
+check "eddy_squad ran once" bash -c '
+    [ "$(grep -c "running: eddy_squad" "'"$SCEN1B"'/log.txt")" = "1" ]'
+check "it was not asked to update" bash -c '
+    ! grep -q -- "--update" "'"$SCEN1B"'/log.txt"'
+check "the group report is no different for it" \
+    test -s "$SCEN1B/output/squad/group_qc.pdf"
+check "and the group database holds all four subjects" bash -c '
+    [ "$(jq -r ".data_no_subjects" "'"$SCEN1B"'/output/squad/group_db.json")" = "4" ]'
+check "the task page says nothing about updated reports" bash -c '
+    ! jq -r ".brainlife[].msg // empty" "'"$SCEN1B"'/product.json" \
+      | grep -q "single-subject report"'
 
 # ---------------------------------------------------------------------------
 # The failure this whole mechanism exists to prevent: some subjects processed on

@@ -59,7 +59,12 @@ if [ -n "$VARIABLE_FILE" ] && [ -s "$VARIABLE_FILE" ]; then
 fi
 SQUAD_ARGS=("${SQUAD_BASE_ARGS[@]}")
 
-UPDATE_REPORTS="$(cfg_bool update_single_subject_reports false)"
+# On by default: a group report whose subjects are not flagged against it is
+# half the point of running SQUAD. Every way this step can fail is already
+# gated -- a subject without a qc.pdf, an FSL that cannot load the update
+# module, and a crash after the group database is written -- so the default
+# costs, at worst, one extra invocation and a warning.
+UPDATE_REPORTS="$(cfg_bool update_single_subject_reports true)"
 if is_true "$UPDATE_REPORTS"; then
     # SQUAD's update step opens each listed subject's qc.pdf to append the
     # study-wise pages to it, so a single subject that published no report would

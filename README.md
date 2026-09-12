@@ -129,22 +129,18 @@ as an array and describes them in `_inputs`, in the same order:
 | `squad/group_db.json` | the study-wise database |
 | `squad/cohorts.json` | which subjects pooled, which did not, and why |
 | `squad/subject_list.txt`, `squad/grouping_variable.txt` | exactly what `eddy_squad` was given |
-| `squad/updated/<subject>_qc_updated.pdf` | single-subject reports with the group's context, when `update_single_subject_reports` is set |
+| `squad/updated/<subject>_qc_updated.pdf` | single-subject reports with the group's context, unless `update_single_subject_reports` is turned off |
 
-Updating the single-subject reports needs two things the group report itself
-does not: each subject's own `qc.pdf`, which `eddy_squad` opens to append the
-study-wise pages to, and `PyPDF2` in FSL's python, which it merges them with.
-When either is missing the update alone is skipped — naming the subject or the
-module — rather than losing the group report, which is what `eddy_squad` would
-do on its own.
+Updating the single-subject reports happens by default, because a subject's own
+report flagged against its group is half the point of running SQUAD. It needs one
+thing the group report itself does not: each pooled subject's own `qc.pdf`, which
+`eddy_squad` opens to append the study-wise pages to. When a subject has not
+published one, the update alone is skipped and that subject is named, rather than
+losing the group report — which is what `eddy_squad` would do on its own.
 
-**FSL 6.0.7.x cannot update single-subject reports at all.** Its `squad_update`
-passes an empty list where `ref_page` expects the eddy parameters, so the step
-dies with `AttributeError: 'list' object has no attribute 'MethodsText'` — after
-the group database has been written. The App notices that the group report
-already exists, re-runs without `--update`, and publishes it; the log says what
-happened. Set `update_single_subject_reports` to false on those builds to skip
-the wasted attempt.
+If the image's FSL cannot perform the update at all, the App publishes the group
+report regardless and the log says why. Set `update_single_subject_reports` to
+false to skip the attempt.
 
 ### Cohorts, and why a group run can refuse
 
@@ -208,7 +204,7 @@ python3 python/eddyqc_summary.py --qc-json <task>/output/qc/eddy_quad/qc.json \
 | `eddyqc` | — | The per-subject eddy QC datasets. A path to a `qc.json`, to any folder holding one (`eddyqc/`, an archived `qc` dataset, or an older task's `output/qc/eddy_quad/`), or a list of either |
 | `grouping_variable` | — | A `participants.tsv`-style table with a subject column and one value column, matched **by subject name**; or a file already in `eddy_squad`'s own format, matched by position |
 | `variable_name` / `variable_is_continuous` | column name / `false` | Label for the variable, and whether to draw scatter plots with a regression fit (continuous) or violin plots per class (categorical) |
-| `update_single_subject_reports` | `false` | Also rewrite each subject's own report with study-wise context |
+| `update_single_subject_reports` | `true` | Also rewrite each subject's own report with study-wise context. Needs that subject's `qc.pdf` among the inputs |
 | `cohort` | largest | The signature (or its short hash) of the cohort to report on |
 | `require_homogeneous` | `false` | Fail when the inputs split into more than one cohort, instead of choosing the largest |
 | `min_subjects` | `2` | Refuse to call a smaller group a study |
