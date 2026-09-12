@@ -51,6 +51,12 @@ reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction.
   group-wise outlier replacement needs the multiband structure and runs on CPU
   too; without a slice specification `--ol_type` degrades to `sw` rather than
   being handed to `eddy` as an invalid combination.
+- The gradient directions `eddy` writes back are cleaned before anything reads
+  them. An unweighted volume is recorded as `0 0 0` with a b-value that is
+  often small but non-zero, and rotating then renormalising that vector yields
+  NaN, which MRtrix refuses outright — so `0 0 0` is restored for volumes at or
+  below `b0_threshold`, and a non-finite direction on a diffusion-weighted
+  volume is refused rather than repaired.
 - The shell to fit is detected from the bvals, so `dtifit_shell` accepts `all`,
   `lowest`, `highest` or an explicit b-value instead of a hard-coded literal.
   Naming a shell the data does not contain is refused up front, and the resolved

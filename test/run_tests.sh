@@ -60,6 +60,7 @@ run "make_slspec"     python3 test/test_make_slspec.py -q
 run "prepare_inputs"  python3 test/test_prepare_inputs.py -q
 run "shells"          python3 test/test_shells.py -q
 run "labels"          python3 test/test_labels.py -q
+run "rotated_bvecs"   python3 test/test_rotated_bvecs.py -q
 run "make_product"    python3 test/test_make_product.py -q
 if python3 -c 'import numpy, nibabel' 2>/dev/null; then
     run "roi_stats"   python3 test/test_roi_stats.py -q

@@ -83,6 +83,12 @@ check "topup config picked for a /4 matrix" \
     grep -q "topup config: b02b0_4.cnf (32x32x12 divides by 4)" "$SCEN/log.txt"
 check "resolved config recorded in provenance" bash -c '
     [ "$(jq -r .provenance.topup_config "'"$SCEN"'/product.json")" = "b02b0_4.cnf" ]'
+# eddy renormalises rotated directions, so an unweighted volume comes back NaN
+# and MRtrix refuses the table.  The published gradients must be finite.
+check "published bvecs are finite" bash -c '
+    awk "{for (i = 1; i <= NF; i++) if (\$i != \$i || \$i ~ /[nN]a[nN]|[iI]nf/) exit 1}" \
+        "'"$SCEN"'/output/dwi/dwi.bvecs"'
+check "the repair is reported" grep -q "restored 0 0 0 for" "$SCEN/log.txt"
 check "product.json is valid"    jq empty "$SCEN/product.json"
 
 # ---------------------------------------------------------------------------

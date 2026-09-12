@@ -111,6 +111,17 @@ log "running: $EDDY_BIN ${EDDY_ARGS[*]} $EDDY_EXTRA"
 ROTATED_BVECS="${EDDY_OUT}.eddy_rotated_bvecs"
 [ -f "$ROTATED_BVECS" ] || die "eddy produced no rotated bvecs"
 
+# Rotating the 0 0 0 direction of an unweighted volume and renormalising it
+# yields NaN, which MRtrix refuses outright -- and these bvecs are published as
+# the output gradient table as well as feeding stage 3.  Clean them once, here,
+# rather than at each of the places that read them.
+CLEAN_BVECS="${EDDY_OUT}.rotated_bvecs"
+python3 "$APP_DIR/python/rotated_bvecs.py" \
+    --bvecs "$ROTATED_BVECS" --bvals "$MERGED_BVALS" --out "$CLEAN_BVECS" \
+    --b0-threshold "$(cfg b0_threshold 50)" \
+    || die "eddy's rotated gradient directions are unusable"
+ROTATED_BVECS="$CLEAN_BVECS"
+
 # ------------------------------------------------------------------- QC ----
 QC_DIR="$WORK_DIR/qc/eddy_quad"
 if is_true "$(cfg_bool eddy_qc true)" && have eddy_quad; then

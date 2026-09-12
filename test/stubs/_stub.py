@@ -209,8 +209,13 @@ def cmd_eddy(argv):
     with open(base + ".eddy_command_txt", "w") as fh:
         fh.write(" ".join([os.path.basename(sys.argv[0])] + argv) + "\n")
 
+    # Real eddy renormalises each direction after rotating it, so a volume
+    # recorded as 0 0 0 -- every unweighted one -- comes back as NaN.
     bvecs = read_bvecs(options["--bvecs"])
-    write_bvecs(base + ".eddy_rotated_bvecs", bvecs)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        norms = np.linalg.norm(bvecs, axis=0)
+        rotated = bvecs / norms
+    write_bvecs(base + ".eddy_rotated_bvecs", rotated)
     n = data.shape[3] if data.ndim == 4 else 1
     with open(base + ".eddy_movement_rms", "w") as fh:
         for i in range(n):
