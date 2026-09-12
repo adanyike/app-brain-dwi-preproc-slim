@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """Summarise diffusion scalar maps inside every atlas ROI.
 
-The original pipeline shelled out to ``mrstats -output mean -mask Roi_<n>`` once
-per ROI per metric (192 subprocesses for 48 ROIs and 4 metrics) and appended a
-bare number to a shared CSV.  This does the same arithmetic in one pass and adds
-the context needed to spot a bad registration: how many voxels each ROI actually
-covered, and the spread of the values inside it.
+Every ROI and every metric is measured in one pass over the label image, and
+alongside the mean each row carries the context needed to spot a bad
+registration: how many voxels the ROI actually covered, and the spread of the
+values inside it.
 
 Three views of the same numbers are written:
 
-  roi_stats.csv    tidy/long -- one row per (metric, ROI); best for analysis
-  <metric>_mean.csv  wide -- one row per subject, one column per ROI, matching
-                   the layout of the legacy ``<batch>_brain_<metric>_<shell>.csv``
-  roi_stats.json   the same content plus provenance, for product.json
+  roi_stats.csv      tidy/long -- one row per (metric, ROI); best for analysis
+  <metric>_mean.csv  wide -- one row per subject, one column per ROI, which is
+                     the shape a spreadsheet wants
+  roi_stats.json     the same content plus provenance, for product.json
 """
 
 from __future__ import annotations
@@ -159,8 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         writer.writeheader()
         writer.writerows(rows)
 
-    # Wide per-metric files, matching the legacy one-row-per-subject layout so
-    # existing downstream spreadsheets keep working.
+    # Wide per-metric files: one row per subject, one column per ROI.
     for name in metrics:
         wide = os.path.join(args.outdir, "%s_mean.csv" % name)
         ordered = [r for r in rows if r["metric"] == name]

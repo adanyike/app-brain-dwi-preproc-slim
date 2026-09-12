@@ -26,19 +26,29 @@ check() {  # check <description> <condition-command...>
     else FAIL=$((FAIL + 1)); note "FAIL -- $1"; fi
 }
 
+# base_config <input dir> [extra jq object] -- the config every scenario that
+# runs to completion starts from.  Stage 4 normally reads FSL's JHU data, and
+# the stub toolchain has no FSL, so the dry run points it at the synthetic
+# template and label image make_test_data.py writes alongside the series.
+base_config() {
+    jq -n --arg d "$1" --argjson o "${2:-{\}}" '{
+        dwi:($d+"/dwi/dwi.nii.gz"), bvals:($d+"/dwi/dwi.bvals"),
+        bvecs:($d+"/dwi/dwi.bvecs"), dwi_json:($d+"/dwi/dwi.json"),
+        rdwi:($d+"/rdwi/dwi.nii.gz"), rbvals:($d+"/rdwi/dwi.bvals"),
+        rbvecs:($d+"/rdwi/dwi.bvecs"), rdwi_json:($d+"/rdwi/dwi.json"),
+        template_fa:($d+"/atlas/template_fa.nii.gz"),
+        atlas:($d+"/atlas/atlas_labels.nii.gz"),
+        subject:"sub-dry", nthreads:2, eddy_niter:2, eddy_fwhm:"10,0"
+    } * $o'
+}
+
 # scenario <name> <bindir> <extra jq object> [make_test_data args...]
 scenario() {
     local name="$1" bindir="$2" overrides="$3"; shift 3
     SCEN="$ROOT/$name"
     mkdir -p "$SCEN"
     python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" "$@" >/dev/null
-    jq -n --arg d "$SCEN/input" --argjson o "$overrides" '{
-        dwi:($d+"/dwi/dwi.nii.gz"), bvals:($d+"/dwi/dwi.bvals"),
-        bvecs:($d+"/dwi/dwi.bvecs"), dwi_json:($d+"/dwi/dwi.json"),
-        rdwi:($d+"/rdwi/dwi.nii.gz"), rbvals:($d+"/rdwi/dwi.bvals"),
-        rbvecs:($d+"/rdwi/dwi.bvecs"), rdwi_json:($d+"/rdwi/dwi.json"),
-        subject:"sub-dry", nthreads:2, eddy_niter:2, eddy_fwhm:"10,0"
-    } * $o' > "$SCEN/config.json"
+    base_config "$SCEN/input" "$overrides" > "$SCEN/config.json"
     printf '\n--- %s ---\n' "$name"
     ( cd "$SCEN" && PATH="$bindir:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
         > "$SCEN/log.txt" 2>&1
@@ -63,8 +73,22 @@ check "gradients match the merged volume count" bash -c '
     [ "$n" = "20" ]'
 check "topup ran"                grep -q -- "--topup=" <<< "$(eddy_cmd)"
 check "no slice-to-volume on CPU" bash -c '! grep -q -- "--mporder" <<< "$(cat "'"$SCEN"'"/work/eddy/eddy_corrected.eddy_command_txt)"'
-check "48 ROIs x 4 metrics recorded" bash -c '
-    [ "$(tail -n +2 "'"$SCEN"'/output/roistats/roi_stats.csv" | wc -l)" = "192" ]'
+# The slspec is still needed without --mporder: group-wise outlier detection
+# uses it, and eddy refuses --ol_type=both without the multiband structure.
+check "slspec passed even without s2v" grep -q -- "--slspec=" <<< "$(eddy_cmd)"
+check "group-wise outlier detection kept" grep -q -- "--ol_type=both" <<< "$(eddy_cmd)"
+check "50 ROIs x 4 metrics recorded" bash -c '
+    [ "$(tail -n +2 "'"$SCEN"'/output/roistats/roi_stats.csv" | wc -l)" = "200" ]'
+check "topup config picked for a /4 matrix" \
+    grep -q "topup config: b02b0_4.cnf (32x32x12 divides by 4)" "$SCEN/log.txt"
+check "resolved config recorded in provenance" bash -c '
+    [ "$(jq -r .provenance.topup_config "'"$SCEN"'/product.json")" = "b02b0_4.cnf" ]'
+# eddy renormalises rotated directions, so an unweighted volume comes back NaN
+# and MRtrix refuses the table.  The published gradients must be finite.
+check "published bvecs are finite" bash -c '
+    awk "{for (i = 1; i <= NF; i++) if (\$i != \$i || \$i ~ /[nN]a[nN]|[iI]nf/) exit 1}" \
+        "'"$SCEN"'/output/dwi/dwi.bvecs"'
+check "the repair is reported" grep -q "restored 0 0 0 for" "$SCEN/log.txt"
 check "product.json is valid"    jq empty "$SCEN/product.json"
 
 # ---------------------------------------------------------------------------
@@ -73,16 +97,42 @@ check "slice-to-volume enabled" grep -q -- "--mporder=6" <<< "$(eddy_cmd)"
 check "slspec passed"           grep -q -- "--slspec=" <<< "$(eddy_cmd)"
 check "s2v iterations passed"   grep -q -- "--s2v_niter=6" <<< "$(eddy_cmd)"
 check "outlier replacement on"  grep -q -- "--repol" <<< "$(eddy_cmd)"
+check "group-wise outliers on GPU" grep -q -- "--ol_type=both" <<< "$(eddy_cmd)"
 check "product reports s2v"     bash -c '[ "$(jq -r .provenance.slice_to_volume_correction "'"$SCEN"'/product.json")" = "true" ]'
 check "slspec published to qc"  test -s "$SCEN/output/qc/slspec.txt"
 
 # ---------------------------------------------------------------------------
+# An odd slice count is no longer special: nothing is cropped, so the measured
+# slspec still describes the volume and slice-to-volume correction is unaffected.
 scenario "3-odd-slices" "$ROOT/bin-gpu" '{"eddy_binary":"eddy_cuda10.2"}' --slices 15 --multiband 3
-check "a slice was cropped"     grep -q "dropping the bottom slice" "$SCEN/log.txt"
-check "multiband factor used instead of slspec" grep -q -- "--mb=3" <<< "$(eddy_cmd)"
-check "offset marks the dropped bottom slice"   grep -q -- "--mb_offs=-1" <<< "$(eddy_cmd)"
-check "no slspec passed"        bash -c '! grep -q -- "--slspec" <<< "$(cat "'"$SCEN"'"/work/eddy/eddy_corrected.eddy_command_txt)"'
+check "every slice kept"        bash -c '
+    python3 -c "
+import sys, nibabel as nib
+sys.exit(0 if nib.load(sys.argv[1]).shape[2] == 15 else 1)" \
+    "'"$SCEN"'/output/dwi/dwi.nii.gz"'
+check "nothing was cropped"     bash -c '! grep -qi "dropping the .* slice" "'"$SCEN"'/log.txt"'
+check "slspec passed, not --mb" bash -c '
+    cmd="$(cat "'"$SCEN"'"/work/eddy/eddy_corrected.eddy_command_txt)"
+    grep -q -- "--slspec=" <<< "$cmd" && ! grep -q -- "--mb=" <<< "$cmd"'
+check "slspec covers all 15 slices" bash -c '
+    [ "$(tr -s "[:space:]" "\n" < "'"$SCEN"'/output/qc/slspec.txt" | grep -c .)" = "15" ]'
+check "five excitations of three" bash -c '
+    [ "$(grep -c "[^[:space:]]" "'"$SCEN"'/output/qc/slspec.txt")" = "5" ]'
 check "still slice-to-volume"   grep -q -- "--mporder=6" <<< "$(eddy_cmd)"
+check "odd matrix selects the unsubsampled config" \
+    grep -q "topup config: b02b0_1.cnf (32x32x15 divides by 1)" "$SCEN/log.txt"
+
+# ---------------------------------------------------------------------------
+# Even but not a multiple of 4, and an explicit override on the same data.
+scenario "3b-even-slices" "$BIN" '{"eddy_binary":"eddy_openmp"}' --slices 10 --multiband 2
+check "even matrix selects the /2 config" \
+    grep -q "topup config: b02b0_2.cnf (32x32x10 divides by 2)" "$SCEN/log.txt"
+
+scenario "3c-explicit-config" "$BIN" '{"eddy_binary":"eddy_openmp","topup_config":"b02b0.cnf"}' --slices 10 --multiband 2
+check "an explicit config wins" \
+    grep -q "topup config: b02b0.cnf (from config.json)" "$SCEN/log.txt"
+check "the explicit config reached topup" bash -c '
+    [ "$(jq -r .provenance.topup_config "'"$SCEN"'/product.json")" = "b02b0.cnf" ]'
 
 # ---------------------------------------------------------------------------
 printf '\n--- 4-no-reverse-pe ---\n'
@@ -125,11 +175,11 @@ check "product.json still written" jq empty "$SCEN/product.json"
 
 # ---------------------------------------------------------------------------
 scenario "6-linear-atlas-interp" "$BIN" '{"eddy_binary":"eddy_openmp","atlas_interpolation":"Linear","write_roi_masks":true,"roi_metrics":["FA"]}'
-check "legacy interpolation logged" grep -q "interpolation: Linear" "$SCEN/log.txt"
+check "linear interpolation logged" grep -q "interpolation: Linear" "$SCEN/log.txt"
 check "labels rounded back to integers" grep -q "rounding interpolated label values" "$SCEN/log.txt"
-check "48 ROI masks written"    bash -c '[ "$(ls "'"$SCEN"'"/work/reg/roi/Roi_*.nii.gz | wc -l)" = "48" ]'
+check "50 ROI masks written"    bash -c '[ "$(ls "'"$SCEN"'"/work/reg/roi/Roi_*.nii.gz | wc -l)" = "50" ]'
 check "single metric recorded"  bash -c '
-    [ "$(tail -n +2 "'"$SCEN"'/output/roistats/roi_stats.csv" | wc -l)" = "48" ]'
+    [ "$(tail -n +2 "'"$SCEN"'/output/roistats/roi_stats.csv" | wc -l)" = "50" ]'
 
 # --------------------------------------------------- multi-shell selection ----
 # The acquisition this app targets: b=0 / 1500 / 3000, where dtifit must be
@@ -174,14 +224,8 @@ printf '\n--- a shell the data does not contain is refused ---\n'
 SCEN="$ROOT/11-shell-absent"
 mkdir -p "$SCEN"
 python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" "${SHELL_DATA_ARGS[@]}" >/dev/null
-jq -n --arg d "$SCEN/input" '{
-    dwi:($d+"/dwi/dwi.nii.gz"), bvals:($d+"/dwi/dwi.bvals"),
-    bvecs:($d+"/dwi/dwi.bvecs"), dwi_json:($d+"/dwi/dwi.json"),
-    rdwi:($d+"/rdwi/dwi.nii.gz"), rbvals:($d+"/rdwi/dwi.bvals"),
-    rbvecs:($d+"/rdwi/dwi.bvecs"), rdwi_json:($d+"/rdwi/dwi.json"),
-    subject:"sub-dry", nthreads:2, eddy_niter:2, eddy_fwhm:"10,0",
-    eddy_binary:"eddy_openmp", dtifit_shell:"800"
-}' > "$SCEN/config.json"
+base_config "$SCEN/input" '{"eddy_binary":"eddy_openmp","dtifit_shell":"800"}' \
+    > "$SCEN/config.json"
 ( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) > "$SCEN/log.txt" 2>&1
 check "pipeline fails rather than fitting the wrong shell" test $? -ne 0
 check "the error names the shells that are present" \
@@ -216,14 +260,7 @@ json.dump({"global": {"const": {
           open(path, "w"))
 EOPY
 done
-jq -n --arg d "$SCEN/input" '{
-    dwi:($d+"/dwi/dwi.nii.gz"), bvals:($d+"/dwi/dwi.bvals"),
-    bvecs:($d+"/dwi/dwi.bvecs"), dwi_json:($d+"/dwi/dwi.json"),
-    rdwi:($d+"/rdwi/dwi.nii.gz"), rbvals:($d+"/rdwi/dwi.bvals"),
-    rbvecs:($d+"/rdwi/dwi.bvecs"), rdwi_json:($d+"/rdwi/dwi.json"),
-    subject:"sub-dry", nthreads:2, eddy_niter:2, eddy_fwhm:"10,0",
-    eddy_binary:"eddy_openmp"
-}' > "$SCEN/config.json"
+base_config "$SCEN/input" '{"eddy_binary":"eddy_openmp"}' > "$SCEN/config.json"
 ( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
     > "$SCEN/log.txt" 2>&1
 check "pipeline exits 0 with no hand-entered acqparams values" test $? -eq 0
@@ -272,14 +309,7 @@ printf '\n--- CUDA eddy without a GPU, require_gpu=true ---\n'
 SCEN="$ROOT/13-require-gpu"
 mkdir -p "$SCEN"
 python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
-jq -n --arg d "$SCEN/input" '{
-    dwi:($d+"/dwi/dwi.nii.gz"), bvals:($d+"/dwi/dwi.bvals"),
-    bvecs:($d+"/dwi/dwi.bvecs"), dwi_json:($d+"/dwi/dwi.json"),
-    rdwi:($d+"/rdwi/dwi.nii.gz"), rbvals:($d+"/rdwi/dwi.bvals"),
-    rbvecs:($d+"/rdwi/dwi.bvecs"), rdwi_json:($d+"/rdwi/dwi.json"),
-    subject:"sub-dry", nthreads:2, eddy_niter:2, eddy_fwhm:"10,0",
-    require_gpu:true
-}' > "$SCEN/config.json"
+base_config "$SCEN/input" '{"require_gpu":true}' > "$SCEN/config.json"
 ( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) > "$SCEN/log.txt" 2>&1
 check "pipeline fails rather than running without a GPU" test $? -ne 0
 check "the error explains how to proceed" grep -q "no GPU is visible" "$SCEN/log.txt"
@@ -294,14 +324,7 @@ python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
 for j in "$SCEN"/input/*/dwi.json; do
     jq 'del(.SliceTiming)' "$j" > "$j.tmp" && mv "$j.tmp" "$j"
 done
-jq -n --arg d "$SCEN/input" '{
-    dwi:($d+"/dwi/dwi.nii.gz"), bvals:($d+"/dwi/dwi.bvals"),
-    bvecs:($d+"/dwi/dwi.bvecs"), dwi_json:($d+"/dwi/dwi.json"),
-    rdwi:($d+"/rdwi/dwi.nii.gz"), rbvals:($d+"/rdwi/dwi.bvals"),
-    rbvecs:($d+"/rdwi/dwi.bvecs"), rdwi_json:($d+"/rdwi/dwi.json"),
-    subject:"sub-dry", nthreads:2, eddy_niter:2, eddy_fwhm:"10,0",
-    eddy_binary:"eddy_cuda10.2"
-}' > "$SCEN/config.json"
+base_config "$SCEN/input" '{"eddy_binary":"eddy_cuda10.2"}' > "$SCEN/config.json"
 ( cd "$SCEN" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
     > "$SCEN/log.txt" 2>&1
 check "pipeline exits 0" test $? -eq 0
@@ -312,6 +335,9 @@ check "no slspec passed" bash -c '
     ! grep -q -- "--slspec" "'"$SCEN"'/work/eddy/eddy_corrected.eddy_command_txt"'
 check "slice-to-volume disabled" bash -c '
     ! grep -q -- "--mporder" "'"$SCEN"'/work/eddy/eddy_corrected.eddy_command_txt"'
+check "outlier detection degrades to slice-wise" bash -c '
+    grep -q -- "--ol_type=sw" "'"$SCEN"'/work/eddy/eddy_corrected.eddy_command_txt"'
+check "the degradation is announced" grep -q "falls back to --ol_type=sw" "$SCEN/log.txt"
 check "product records no slice-to-volume" bash -c '
     [ "$(jq -r .provenance.slice_to_volume_correction "'"$SCEN"'/product.json")" = "false" ]'
 
@@ -333,6 +359,63 @@ check "slice-to-volume enabled" bash -c '
     grep -q -- "--mporder=6" "'"$SCEN2"'/work/eddy/eddy_corrected.eddy_command_txt"'
 check "what was published is what was supplied" \
     cmp -s "$SCEN2/slspec.txt" "$SCEN2/output/qc/slspec.txt"
+
+# --- a slspec from a different protocol is refused, not handed to eddy ---
+printf '\n--- a slspec from another protocol is refused ---\n'
+SCEN3="$ROOT/15b-wrong-slspec"
+cp -r "$SCEN" "$SCEN3"
+rm -rf "$SCEN3/work" "$SCEN3/output"
+# The shipped 84-slice example against 12-slice data: the realistic misuse.
+cp "$APP/templates/philips_84_slices_slspec.txt" "$SCEN3/slspec.txt"
+jq --arg s "$SCEN3/slspec.txt" '.slspec = $s' "$SCEN/config.json" > "$SCEN3/config.json"
+( cd "$SCEN3" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
+    > "$SCEN3/log.txt" 2>&1
+check "a mismatched slspec is refused" test $? -ne 0
+check "the refusal says what is wrong" \
+    grep -q "does not describe this acquisition" "$SCEN3/log.txt"
+check "it stops before eddy ran" bash -c '
+    [ ! -e "'"$SCEN3"'/work/eddy/eddy_corrected.eddy_command_txt" ]'
+
+# ------------------------------------------------ declared slice order ----
+# The Philips case: the sidecar carries no timings, so the excitation order is
+# declared from the protocol instead.  make_test_data.py writes a step-2
+# interleave, so "interleaved" is the truthful declaration for this data.
+printf '\n--- a declared slice order, with no SliceTiming to derive from ---\n'
+SCEN="$ROOT/16-declared-order"
+mkdir -p "$SCEN"
+python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
+for j in "$SCEN"/input/*/dwi.json; do
+    jq 'del(.SliceTiming)' "$j" > "$j.tmp" && mv "$j.tmp" "$j"
+done
+base_config "$SCEN/input" '{"eddy_binary":"eddy_cuda10.2","slice_order":"interleaved","multiband":2}' \
+    > "$SCEN/config.json"
+( cd "$SCEN" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
+    > "$SCEN/log.txt" 2>&1
+check "pipeline exits 0"        test $? -eq 0
+check "the slspec was generated" grep -q "declared slice order 'interleaved'" "$SCEN/log.txt"
+check "slice-to-volume is back on" grep -q -- "--mporder=6" <<< "$(eddy_cmd)"
+check "slspec passed to eddy"   grep -q -- "--slspec=" <<< "$(eddy_cmd)"
+check "the generated order is the interleave" bash -c '
+    [ "$(head -1 "'"$SCEN"'/output/qc/slspec.txt" | tr -s " " | sed "s/^ *//")" = "0 6" ]'
+
+# With timings present the declaration is checked against them, not trusted.
+scenario "16b-declared-agrees" "$ROOT/bin-gpu" '{"eddy_binary":"eddy_cuda10.2","slice_order":"interleaved","multiband":2}'
+check "the declaration is cross-checked" \
+    grep -q "agrees with the sidecar" "$SCEN/log.txt"
+check "slice-to-volume still enabled" grep -q -- "--mporder=6" <<< "$(eddy_cmd)"
+
+printf '\n--- a declared slice order that contradicts the sidecar ---\n'
+SCEN="$ROOT/16c-declared-conflicts"
+mkdir -p "$SCEN"
+python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
+base_config "$SCEN/input" '{"eddy_binary":"eddy_cuda10.2","slice_order":"ascending","multiband":2}' \
+    > "$SCEN/config.json"
+( cd "$SCEN" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
+    > "$SCEN/log.txt" 2>&1
+check "the contradiction is fatal" test $? -ne 0
+check "it names both orders"    grep -q "does not match the SliceTiming" "$SCEN/log.txt"
+check "it stops before eddy ran" bash -c '
+    [ ! -e "'"$SCEN"'/work/eddy/eddy_corrected.eddy_command_txt" ]'
 
 # ---------------------------------------------------------------------------
 printf '\n--- resume from a later stage ---\n'

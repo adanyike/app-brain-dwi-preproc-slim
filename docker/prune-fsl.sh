@@ -34,9 +34,24 @@ echo "prune-fsl: starting at ${before:-?} MB"
 # Conda package cache: tarballs already unpacked into the environment.
 drop "conda package cache" "$FSLDIR/pkgs"
 
-# Reference data. This app ships its own JHU template and atlas under
-# templates/, and never reads FSL's standard-space or atlas data.
-drop "atlases"            "$FSLDIR/data/atlases"
+# Reference data. Stage 4 warps FSL's JHU ICBM-DTI-81 label image, so that file
+# and the label list beside it are kept; every other atlas goes, FSL's own JHU FA
+# template included -- the app registers to its own copy under templates/.
+KEEP_ATLAS_FILES="JHU/JHU-ICBM-labels-1mm.nii.gz JHU-labels.xml"
+keep_jhu() {
+    local atlases="$FSLDIR/data/atlases" kept="$FSLDIR/data/atlases.keep" rel
+    [ -d "$atlases" ] || return 0
+    for rel in $KEEP_ATLAS_FILES; do
+        [ -f "$atlases/$rel" ] || { echo "prune-fsl: $atlases/$rel is missing" >&2; exit 1; }
+        mkdir -p "$kept/$(dirname "$rel")"
+        cp -p "$atlases/$rel" "$kept/$rel"
+    done
+    drop "atlases (JHU labels and label list kept)" "$atlases"
+    mv "$kept" "$atlases"
+    for rel in $KEEP_ATLAS_FILES; do printf '  + kept %s\n' "data/atlases/$rel"; done
+}
+keep_jhu
+
 drop "FIRST shape models" "$FSLDIR/data/first"
 drop "standard spaces"    "$FSLDIR/data/standard"
 drop "POSSUM simulator"   "$FSLDIR/data/possum"
@@ -79,8 +94,8 @@ drop "fonts and tcl"  "$FSLDIR/fonts" "$FSLDIR/tcl"
 # nine FSL programs this pipeline runs touches it.
 drop "OpenVINO runtime" "$FSLDIR"/lib/openvino-*
 
-# Remaining reference data. This app registers to its own JHU template, so the
-# Oxford-MM warps and the FIX macaque masks are never read.
+# Remaining reference data: the Oxford-MM warps and the FIX macaque masks are
+# never read.
 drop "Oxford-MM template"  "$FSLDIR/data/omm"
 drop "FIX macaque masks"   "$FSLDIR"/lib/python*/site-packages/pyfix/resources
 

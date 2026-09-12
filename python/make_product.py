@@ -98,6 +98,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--eddy-binary", default="")
     ap.add_argument("--slice-to-volume", default="false")
     ap.add_argument("--topup-applied", default="false")
+    ap.add_argument("--topup-config", default="",
+                    help="the topup configuration file the run resolved to")
     ap.add_argument("--shell", default="")
     ap.add_argument("--motion-warn-mm", type=float, default=2.0)
     ap.add_argument("--out", required=True)
@@ -185,6 +187,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "phase_encoding": prep.get("phase_encoding", []),
             "n_volumes": prep.get("n_volumes"),
             "topup_applied": topup_applied,
+            "topup_config": args.topup_config,
             "eddy_binary": args.eddy_binary,
             "slice_to_volume_correction": s2v,
             "shells_detected": detected,

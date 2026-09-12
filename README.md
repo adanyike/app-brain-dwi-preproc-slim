@@ -9,7 +9,7 @@ followed by diffusion tensor fitting and white-matter ROI extraction.
 The app corrects susceptibility distortion from an opposing phase-encode pair,
 corrects eddy currents and subject motion — including **within-volume
 (slice-to-volume) motion** where a GPU is available — fits the diffusion tensor,
-and reports mean FA, MD, AD and RD in the 48 white-matter regions of the JHU
+and reports mean FA, MD, AD and RD in the 50 white-matter regions of the JHU
 ICBM-DTI-81 atlas, in each subject's own diffusion space.
 
 ## What it does
@@ -21,12 +21,12 @@ ICBM-DTI-81 atlas, in each subject's own diffusion space.
 | 2 | Eddy-current, motion and slice-to-volume correction with outlier replacement, applying the field | FSL `eddy_cuda` |
 | 3 | B1 bias-field correction; detect the b-value shells and fit the tensor to one; derive RD, AD, colour FA and Westin shape measures | MRtrix3, ANTs, FSL `dtifit` |
 | 4 | Register the JHU FA template to each subject's FA and warp the atlas labels into native space | ANTs |
-| 5 | Mean, SD and median of each metric in each of the 48 ROIs | — |
+| 5 | Mean, SD and median of each metric in each of the 50 ROIs | — |
 
 All stages run as a single task. Quality-control output from `eddy_quad` and a
 summary with per-volume motion and per-ROI FA are produced alongside the results.
 
-Two details worth knowing, because they are derived rather than assumed:
+Three details worth knowing, because they are derived rather than assumed:
 
 * **The acquisition parameters are read from the sidecars.** Phase-encoding
   direction and total readout time are taken from `PhaseEncodingDirection` and
@@ -37,6 +37,20 @@ Two details worth knowing, because they are derived rather than assumed:
   `MosaicRefAcqTimes`). Slices are grouped by acquisition time, so the multiband
   factor is measured rather than assumed; a non-uniform grouping is reported as
   an error instead of producing a silently wrong file.
+* **The topup configuration is chosen from the matrix size.** topup requires the
+  image size to be a multiple of each sub-sampling level in its config, so the
+  app reads the dimensions and picks the fastest one they allow: `b02b0_4.cnf`
+  when every dimension divides by 4, `b02b0_2.cnf` when they divide by 2, and
+  `b02b0_1.cnf` otherwise. Sub-sampling only affects speed — FSL states the
+  results are very close to identical — and the resolved config is recorded in
+  `product.json`.
+
+Because of that last point, every acquired slice is kept whatever the slice
+count. There is no reason to crop or duplicate a slice to make the count even:
+[FSL withdrew that advice](https://fsl.fmrib.ox.ac.uk/fsl/docs/diffusion/topup/users_guide/index.html)
+because a cropped volume no longer carries the multiband structure `eddy` needs
+for slice-to-volume correction, and an odd dimension simply selects
+`b02b0_1.cnf` instead.
 
 ## Inputs
 
@@ -52,14 +66,28 @@ run is geometrically wrong while being named, shaped and summarised exactly like
 a corrected one, so nothing downstream could tell the two apart if they were
 pooled. Data with no opposing pair needs a different app.
 
-Slice-to-volume correction needs to know the slice acquisition order. Normally
-that is derived from `SliceTiming` in the sidecar. Where the sidecar does not
-carry it — some Philips exports, or a converter that dropped the field — supply
-the `eddy` slice specification directly as the `slspec` input: one row per
-excitation, listing the 0-based slices acquired together. A file for a Philips
-84-slice, multiband-3 protocol ships in `templates/` as a worked example. Given
-neither, the app still completes, but corrects motion volume-to-volume only and
-records that in the summary.
+Slice-to-volume correction needs to know the slice acquisition order, which the
+app resolves from the first of these that is available:
+
+1. **An `slspec` input file.** One row per excitation, listing the 0-based
+   slices acquired together. A file for an 84-slice, multiband-4 protocol ships
+   in `templates/` as a worked example of the format — it is not a drop-in for
+   other protocols, and a slspec that does not describe the acquisition (wrong
+   slice count, out-of-range or repeated indices, ragged rows) is refused rather
+   than passed to `eddy`.
+2. **A declared `slice_order`**, plus `multiband`, `slice_packages` and
+   `slice_step` as the protocol requires. This is for sidecars that carry no
+   timings at all — some Philips exports, or a converter that dropped the field.
+   It asserts the acquisition rather than measuring it, so it is opt-in; where
+   the sidecar does carry `SliceTiming`, the declaration is checked against it
+   and a disagreement stops the run. Note that Philips's own `default` scan
+   order interleaves with a step of roughly √(slices per package) rather than
+   the step of 2 that `interleaved` means, so check `philips_default` against
+   your protocol printout or give `slice_step` explicitly.
+3. **`SliceTiming` in the sidecar**, the usual case, needing no configuration.
+
+Given none of the three the app still completes, but corrects motion
+volume-to-volume only and records that in the summary.
 
 ## Outputs
 
@@ -79,8 +107,7 @@ one column per ROI.
 
 ## Configuration
 
-Every parameter is optional; the defaults are the values used in the pipeline
-this app was built from.
+Every parameter is optional.
 
 | Parameter | Default | Meaning |
 |---|---|---|
@@ -91,8 +118,14 @@ this app was built from.
 | `eddy_niter` / `eddy_fwhm` | `6` / `10,6,0,0,0,0` | Eddy iterations and per-iteration smoothing |
 | `require_gpu` | `false` | `true` fails when no GPU is visible; `false` falls back to a CPU eddy and skips slice-to-volume correction |
 | `biascorrect` | `ants` | B1 bias correction: `ants`, `fsl` or `none` |
+| `slice_order` | `auto` | How the `eddy` slice specification is obtained when no `slspec` **input** is given (that file wins if present). `auto` derives it from `SliceTiming`; `ascending`, `descending`, `interleaved`, `rev_interleaved`, `philips_default` or `step` declare it from the protocol instead, for sidecars carrying no timings |
+| `multiband` / `slice_packages` / `slice_step` | `1` / `1` / — | Protocol parameters used with a declared `slice_order` |
+| `acqp` / `index` | derived | Supply `acqparams.txt` / `index.txt` directly, replacing the values derived from the sidecars. For datasets whose sidecars are incomplete |
+| `topup_config` | `auto` | FSL topup schedule, chosen from the matrix size: `b02b0_4.cnf`, `b02b0_2.cnf` or `b02b0_1.cnf` as the dimensions divide by 4, 2 or neither. Name one explicitly to override |
 | `atlas_registration` | `true` | Set false to stop after preprocessing and the tensor fit |
 | `atlas_interpolation` | `MultiLabel` | Interpolation used when warping atlas labels |
+| `template_fa` / `atlas` | FSL's JHU data | Override the FA template and label image the atlas stage uses |
+| `atlas_labels` | `templates/JHU-ICBM-labels.json` | ROI names and abbreviations for the label image |
 | `roi_metrics` | `FA, MD, AD, RD` | Metrics to summarise per ROI |
 | `subject` / `session` | from input metadata | Labels written into the results |
 | `nthreads` | all cores | Threads for MRtrix3, ANTs and OpenMP |
@@ -134,6 +167,17 @@ Provided by the container:
 | FSL | 6.0.7.23 |
 | MRtrix3 | 3.0.8 |
 | ANTs | 2.6.5 |
+
+The atlas stage uses two images from different places. The FA template it
+registers to is this repository's `templates/JHU-ICBM-FA-1mm.nii.gz`, so the
+registration target is the same image however the app is run and whatever FSL
+release is installed. The label image it warps is FSL's, read from
+`$FSLDIR/data/atlases/JHU`, along with the label list the ROI names are checked
+against; the names and abbreviations themselves live in
+`templates/JHU-ICBM-labels.json`, and FSL listed 48 of the 50 regions before
+6.0.5. The self-test refuses to build an image whose label list and label image
+disagree on how many regions there are, or whose template and label image do not
+share a grid — the transform is estimated from one and applied to the other.
 
 ## Citing
 
@@ -194,6 +238,5 @@ If you use this app, please cite brainlife.io and the methods it runs.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). The bundled JHU ICBM-DTI-81 FA template and label
-atlas are distributed with FSL under the FSL licence for non-commercial research
-use.
+MIT — see [LICENSE](LICENSE). The JHU ICBM-DTI-81 FA template and label atlas are
+distributed with FSL under the FSL licence for non-commercial research use.

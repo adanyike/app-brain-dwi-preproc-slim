@@ -95,8 +95,66 @@ for tool in fslval fslroi fslmerge fslmaths bet topup dtifit; do
     check_runs "$tool"
 done
 # topup reads its configuration from $FSLDIR/etc/flirtsch at run time, so the
-# binary being present is not enough.
-check_file "topup b02b0.cnf config" "${FSLDIR:-/opt/fsl}/etc/flirtsch/b02b0.cnf"
+# binary being present is not enough.  b02b0_1.cnf is the app's default; the
+# sub-sampling variants are there for anyone who sets topup_config.
+for cnf in b02b0_1.cnf b02b0.cnf; do
+    check_file "topup $cnf config" "${FSLDIR:-/opt/fsl}/etc/flirtsch/$cnf"
+done
+
+# Stage 4 registers the app's own JHU FA template to each subject and warps
+# FSL's label image with the result, so one file comes from templates/ and the
+# other has to survive the prune.
+echo "JHU atlas"
+FSL_ATLASES="${FSLDIR:-/opt/fsl}/data/atlases"
+APP_DIR_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP_FA="$APP_DIR_SELF/templates/JHU-ICBM-FA-1mm.nii.gz"
+FSL_LABELS="$FSL_ATLASES/JHU/JHU-ICBM-labels-1mm.nii.gz"
+check_file "JHU FA template"  "$APP_FA"
+check_file "JHU label image"  "$FSL_LABELS"
+check_file "JHU label list"   "$FSL_ATLASES/JHU-labels.xml"
+
+# The transform is estimated from the FA template and then applied to the label
+# image, so the two have to sit on the same grid.  Nothing ties them together --
+# one ships with this app, the other with whatever FSL release is installed --
+# so check rather than assume.
+CHECKED=$((CHECKED + 1))
+grid_fa=""; grid_lab=""
+for key in dim1 dim2 dim3 pixdim1 pixdim2 pixdim3 qform_xorient qform_yorient qform_zorient; do
+    grid_fa="$grid_fa $(fslval "$APP_FA" "$key" 2>/dev/null | tr -d '[:space:]')"
+    grid_lab="$grid_lab $(fslval "$FSL_LABELS" "$key" 2>/dev/null | tr -d '[:space:]')"
+done
+if [ -n "$(tr -d '[:space:]' <<< "$grid_fa")" ] && [ "$grid_fa" = "$grid_lab" ]; then
+    pass "FA template and label image share a grid ($(tr -s ' ' <<< "$grid_fa" | cut -d' ' -f2-4 | tr ' ' 'x'))"
+else
+    fail "FA/label grid" "template is [$grid_fa ] but the label image is [$grid_lab ]"
+fi
+
+# The app's own label metadata drives every ROI table, so it has to agree with
+# the label image it is read against.  FSL listed 48 regions before 6.0.5 and 50
+# from 6.0.5 on; a mismatch here means every ROI past the divergence is reported
+# under the wrong name.
+CHECKED=$((CHECKED + 1))
+APP_LABELS="$APP_DIR_SELF/templates/JHU-ICBM-labels.json"
+if [ ! -f "$APP_LABELS" ] || [ ! -f "$FSL_ATLASES/JHU-labels.xml" ]; then
+    fail "JHU label metadata" "cannot compare: $APP_LABELS or the FSL label list is missing"
+else
+    app_n="$(jq -r '.labels | length' "$APP_LABELS")"
+    # In FSL's label list the index attribute *is* the voxel value, and index 0
+    # is the "Unclassified" background rather than a region -- so the region
+    # count is the number of non-zero indices, not the number of <label>
+    # elements, and the highest index is the top voxel value.
+    fsl_indices="$(sed -n 's/.*<label index="\([0-9]*\)".*/\1/p' \
+                   "$FSL_ATLASES/JHU-labels.xml")"
+    fsl_n="$(printf '%s\n' "$fsl_indices" | grep -vc '^0$' || true)"
+    fsl_max="$(printf '%s\n' "$fsl_indices" | sort -n | tail -1)"
+    max_label="$(fslstats "$FSL_LABELS" -R | awk '{printf "%d", $2 + 0.5}')"
+    if [ "$app_n" = "$fsl_n" ] && [ "$app_n" = "$fsl_max" ] && [ "$app_n" = "$max_label" ]; then
+        pass "JHU label metadata ($app_n ROIs, matching FSL's label list and image)"
+    else
+        fail "JHU label metadata" \
+             "templates/JHU-ICBM-labels.json has $app_n ROIs, JHU-labels.xml describes $fsl_n (highest index $fsl_max), the label image goes up to $max_label"
+    fi
+fi
 
 # eddy is named differently across FSL releases; at least one must work.
 echo "eddy"

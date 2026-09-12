@@ -2,10 +2,9 @@
 # Stage 2 -- eddy current, motion and (where possible) slice-to-volume
 # correction, applying the topup field at the same time.
 #
-# Slice-to-volume correction (--mporder) is CUDA-only.  When a CUDA build of
-# eddy is available the stage uses the outlier/movement settings from the
-# original pipeline; otherwise it degrades to volume-to-volume correction and
-# says so loudly rather than failing.
+# Slice-to-volume correction (--mporder) is CUDA-only.  Without a CUDA build of
+# eddy the stage degrades to volume-to-volume correction and says so loudly
+# rather than failing.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 source "$WORK_DIR/state.sh"
@@ -38,6 +37,12 @@ if is_cuda_eddy "$EDDY_BIN"; then
 else
     warn "no CUDA eddy build available -- slice-to-volume correction is disabled and this stage will be considerably slower"
 fi
+# Slice-to-volume needs a slice specification as well as a GPU, so settle the
+# question here -- everything slice-aware below keys off this one flag.
+if is_true "$USE_S2V" && [ -z "$SLSPEC" ]; then
+    warn "no slice timing information -- running volume-to-volume correction only"
+    USE_S2V=false
+fi
 log "eddy binary in use: $EDDY_BIN (slice-to-volume: $USE_S2V)"
 
 EDDY_ARGS=(
@@ -55,8 +60,22 @@ EDDY_ARGS=(
 EDDY_NITER="$(cfg eddy_niter 6)"
 EDDY_ARGS+=(--niter="$EDDY_NITER")
 
+# The slice specification tells eddy which slices were excited together.
+# Slice-to-volume correction needs it, but so does group-wise outlier
+# detection, which runs on CPU too -- so pass it whenever one exists, not only
+# when --mporder is in play.
+[ -n "$SLSPEC" ] && EDDY_ARGS+=(--slspec="$SLSPEC") || true
+
 if is_true "$(cfg_bool eddy_repol true)"; then
-    EDDY_ARGS+=(--repol --ol_type="$(cfg eddy_ol_type both)")
+    OL_TYPE="$(cfg eddy_ol_type both)"
+    # 'both' and 'gw' detect outliers across multiband groups and eddy refuses
+    # them outright without a slice specification.  Degrade to slice-wise
+    # rather than handing it an invalid combination.
+    if [ -z "$SLSPEC" ] && [ "$OL_TYPE" != sw ]; then
+        warn "no slice specification available -- outlier detection falls back to --ol_type=sw ('$OL_TYPE' needs the multiband structure)"
+        OL_TYPE=sw
+    fi
+    EDDY_ARGS+=(--repol --ol_type="$OL_TYPE")
 fi
 
 EDDY_FWHM="$(cfg eddy_fwhm '10,6,0,0,0,0')"
@@ -68,24 +87,9 @@ if [ -n "$EDDY_FWHM" ]; then
 fi
 
 if is_true "$USE_S2V"; then
-    MPORDER="$(cfg eddy_mporder 6)"
-    if [ -n "$SLSPEC" ]; then
-        log "slice-to-volume correction with an explicit slspec"
-        EDDY_ARGS+=(--mporder="$MPORDER"
-                    --s2v_niter="$(cfg eddy_s2v_niter 6)"
-                    --slspec="$SLSPEC")
-    elif [ -n "$MB_FACTOR" ]; then
-        # A slice was cropped, so the slspec rows no longer line up; describe the
-        # same interleave with --mb and the offset of the dropped slice.
-        if [ "$SLICE_DROPPED" = bottom ]; then MB_OFFS=-1; else MB_OFFS=1; fi
-        log "slice-to-volume correction with --mb $MB_FACTOR --mb_offs $MB_OFFS"
-        EDDY_ARGS+=(--mporder="$MPORDER"
-                    --s2v_niter="$(cfg eddy_s2v_niter 6)"
-                    --mb="$MB_FACTOR" --mb_offs="$MB_OFFS")
-    else
-        warn "no slice timing information -- running volume-to-volume correction only"
-        USE_S2V=false
-    fi
+    log "slice-to-volume correction with an explicit slspec"
+    EDDY_ARGS+=(--mporder="$(cfg eddy_mporder 6)"
+                --s2v_niter="$(cfg eddy_s2v_niter 6)")
 fi
 
 is_true "$(cfg_bool eddy_data_is_shelled true)" && EDDY_ARGS+=(--data_is_shelled) || true
@@ -106,6 +110,17 @@ log "running: $EDDY_BIN ${EDDY_ARGS[*]} $EDDY_EXTRA"
 
 ROTATED_BVECS="${EDDY_OUT}.eddy_rotated_bvecs"
 [ -f "$ROTATED_BVECS" ] || die "eddy produced no rotated bvecs"
+
+# Rotating the 0 0 0 direction of an unweighted volume and renormalising it
+# yields NaN, which MRtrix refuses outright -- and these bvecs are published as
+# the output gradient table as well as feeding stage 3.  Clean them once, here,
+# rather than at each of the places that read them.
+CLEAN_BVECS="${EDDY_OUT}.rotated_bvecs"
+python3 "$APP_DIR/python/rotated_bvecs.py" \
+    --bvecs "$ROTATED_BVECS" --bvals "$MERGED_BVALS" --out "$CLEAN_BVECS" \
+    --b0-threshold "$(cfg b0_threshold 50)" \
+    || die "eddy's rotated gradient directions are unusable"
+ROTATED_BVECS="$CLEAN_BVECS"
 
 # ------------------------------------------------------------------- QC ----
 QC_DIR="$WORK_DIR/qc/eddy_quad"

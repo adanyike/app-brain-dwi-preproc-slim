@@ -8,6 +8,10 @@ WORK_DIR="${WORK_DIR:-$PWD/work}"
 OUT_DIR="${OUT_DIR:-$PWD/output}"
 CONFIG="${CONFIG:-$PWD/config.json}"
 TEMPLATE_DIR="${TEMPLATE_DIR:-$APP_DIR/templates}"
+FSLDIR="${FSLDIR:-/opt/fsl}"
+# The JHU ICBM-DTI-81 FA template and label image ship with FSL, so the app
+# reads them from the installation rather than carrying its own copies.
+JHU_DIR="${JHU_DIR:-$FSLDIR/data/atlases/JHU}"
 
 log()  { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 warn() { printf '[%s] WARNING: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
@@ -201,12 +205,9 @@ gpu_present() {
 # bias_correct <in> <out> <bvecs> <bvals> <mask> <algorithm>
 #
 # MRtrix3 takes the algorithm as a positional argument: `dwibiascorrect ants ...`.
-# This used to probe for the 3.0_RC3 spelling (`-ants`, a flag) and fall back to
-# it, but the container pins MRtrix3 3.0.8 and the probe was unreliable: run
-# with no arguments, 3.0.8 prints a usage error that does not name the
-# algorithms, so the probe silently chose the 2019 syntax and the run died with
-# "argument algorithm: invalid choice: <input path>". Compatibility code for a
-# version the image cannot contain, breaking the version it does.
+# The 3.0_RC3 spelling (`-ants`, a flag) is not supported: the container pins
+# MRtrix3 3.0.8, and probing for the old syntax is unreliable because 3.0.8's
+# no-argument usage error does not name the algorithms.
 bias_correct() {
     local in="$1" out="$2" bvecs="$3" bvals="$4" mask="$5" algo="$6"
     dwibiascorrect "$algo" -force -nthreads "$NTHREADS" \
