@@ -14,6 +14,7 @@ selects the behaviour.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -223,8 +224,22 @@ def cmd_eddy(argv):
     with open(base + ".eddy_parameters", "w") as fh:
         for _ in range(n):
             fh.write(" ".join(["0"] * 16) + "\n")
-    with open(base + ".eddy_outlier_report", "w") as fh:
-        fh.write("")
+
+    # Which of these exist is what eddy_quad keys its QC metrics off, and so
+    # what decides whether subjects can be pooled by eddy_squad later.
+    if "--repol" in argv:
+        with open(base + ".eddy_outlier_report", "w") as fh:
+            fh.write("")
+        with open(base + ".eddy_outlier_map", "w") as fh:
+            fh.write("")
+    if "--mporder" in options:
+        with open(base + ".eddy_movement_over_time", "w") as fh:
+            for _ in range(n):
+                fh.write(" ".join(["0"] * 6) + "\n")
+    if "--cnr_maps" in argv:
+        save(base + ".eddy_cnr_maps.nii.gz", np.asanyarray(data)[..., :1], imain)
+    if "--residuals" in argv:
+        save(base + ".eddy_residuals.nii.gz", data, imain)
 
 
 def cmd_dtifit(argv):
@@ -260,11 +275,158 @@ def cmd_dtifit(argv):
         save(base + "_tensor.nii.gz", np.repeat(fa[..., None], 6, axis=3), img)
 
 
+def option(argv, *names):
+    """The value of the first of `names` present in argv, or None."""
+    for name in names:
+        if name in argv:
+            index = argv.index(name)
+            if index + 1 < len(argv):
+                return argv[index + 1]
+        for item in argv:
+            if item.startswith(name + "="):
+                return item.split("=", 1)[1]
+    return None
+
+
 def cmd_eddy_quad(argv):
-    outdir = argv[argv.index("--output-dir") + 1] if "--output-dir" in argv else "quad"
+    """Write the database real QUAD writes, with the flags the arguments imply.
+
+    The group side turns on exactly these flags, so a stub that always wrote the
+    same qc.json would make the cohort logic untestable.  Which metrics QUAD can
+    compute is decided by which eddy outputs exist, so that is what is checked
+    here: a CNR map on disk means CNR metrics, --field means the susceptibility
+    field, and so on.
+    """
+    outdir = option(argv, "--output-dir", "-o") or "quad"
     os.makedirs(outdir, exist_ok=True)
+    base = argv[0] if argv and not argv[0].startswith("-") else ""
+    bvals = read_bvals(option(argv, "--bvals", "-b")) if option(argv, "--bvals", "-b") else np.zeros(1)
+
+    b0 = bvals < 50
+    shells = sorted({int(round(b / 50.0)) * 50 for b in bvals[~b0]})
+    # QUAD derives the flags from eddy's output, not from its own arguments.
+    has_s2v = os.path.exists(base + ".eddy_movement_over_time")
+    has_ol = os.path.exists(base + ".eddy_outlier_report")
+    has_cnr = os.path.exists(base + ".eddy_cnr_maps.nii.gz")
+    has_rss = os.path.exists(base + ".eddy_residuals.nii.gz")
+    has_field = option(argv, "--field", "-f") is not None
+
+    acqp = option(argv, "--eddyParams", "-par")
+    n_pe = 1
+    if acqp and os.path.exists(acqp):
+        with open(acqp) as fh:
+            n_pe = len({line.strip() for line in fh if line.strip()}) or 1
+
+    qc = {
+        "data_file_eddy": base,
+        "data_no_dw_vols": int((~b0).sum()),
+        "data_no_b0_vols": int(b0.sum()),
+        "data_no_PE_dirs": n_pe,
+        "data_no_shells": len(shells),
+        "data_unique_bvals": shells,
+        "data_vox_size": [2.0, 2.0, 2.0],
+        "data_protocol": [[b, int((bvals == b).sum())] for b in shells],
+        "qc_mot_abs": 0.42,
+        "qc_mot_rel": 0.19,
+        "qc_params_flag": True,
+        "qc_params_avg": [0.0] * 9,
+        "qc_s2v_params_flag": has_s2v,
+        "qc_field_flag": has_field,
+        "qc_ol_flag": has_ol,
+        "qc_outliers_tot": 1.25,
+        "qc_outliers_b": [1.0] * len(shells),
+        "qc_outliers_pe": [1.0] * n_pe,
+        "qc_cnr_flag": has_cnr,
+        "qc_cnr_avg": [12.0] + [2.5] * len(shells) if has_cnr else [],
+        "qc_cnr_std": [1.0] + [0.3] * len(shells) if has_cnr else [],
+        "qc_rss_flag": has_rss,
+    }
+    if has_s2v:
+        qc["qc_s2v_params_avg_std"] = [0.0] * 6
+    if has_field:
+        qc["qc_vox_displ_std"] = 0.8
     with open(os.path.join(outdir, "qc.json"), "w") as fh:
-        fh.write('{"stub": true}\n')
+        json.dump(qc, fh, indent=4, sort_keys=True)
+    with open(os.path.join(outdir, "qc.pdf"), "w") as fh:
+        fh.write("%PDF-1.4 stub single-subject report\n")
+
+
+def cmd_eddy_squad(argv):
+    """Stand in for eddy_squad: same contract, none of the plotting.
+
+    It reproduces the two behaviours the group stage depends on -- the refusal
+    when the subjects' eddy flags disagree, and the group_db schema, where each
+    QC index is one row per subject in list order -- plus --update writing
+    qc_updated.pdf back into each listed folder.
+    """
+    positional = [a for a in argv if not a.startswith("-")]
+    flags = [a for a in argv if a.startswith("-")]
+    outdir = option(argv, "--output-dir", "-o") or "squad"
+    grouping = option(argv, "--grouping", "-g")
+    # option() consumed the values; what remains positional is the list file.
+    consumed = {option(argv, "--output-dir", "-o"), grouping}
+    positional = [p for p in positional if p not in consumed]
+    if not positional:
+        sys.exit("eddy_squad: no subject list given")
+
+    with open(positional[0]) as fh:
+        folders = [line.strip() for line in fh if line.strip()]
+    if not folders:
+        sys.exit("eddy_squad: the subject list is empty")
+
+    databases = []
+    for folder in folders:
+        path = os.path.join(folder, "qc.json")
+        if not os.path.isfile(path):
+            sys.exit("eddy_squad: %s does not contain a qc.json" % folder)
+        with open(path) as fh:
+            databases.append(json.load(fh))
+
+    # The check that makes this whole exercise necessary: squad_db.py compares
+    # these flags across subjects and raises before writing anything.
+    names = ("qc_params_flag", "qc_s2v_params_flag", "qc_field_flag",
+             "qc_ol_flag", "qc_cnr_flag", "qc_rss_flag")
+    for name in names:
+        if len({bool(db.get(name)) for db in databases}) > 1:
+            sys.exit("ValueError: Eddy output inconsistency detected!")
+
+    if grouping is not None:
+        with open(grouping) as fh:
+            lines = [line.strip() for line in fh if line.strip()]
+        if len(lines) - 2 != len(folders):
+            sys.exit("eddy_squad: the grouping variable has %d values for %d subjects"
+                     % (len(lines) - 2, len(folders)))
+
+    first = databases[0]
+    os.makedirs(outdir, exist_ok=True)
+    group = {
+        "data_no_subjects": len(databases),
+        "data_no_shells": first.get("data_no_shells"),
+        "data_no_pes": first.get("data_no_PE_dirs"),
+        "data_no_b0_vols": first.get("data_no_b0_vols"),
+        "data_no_dw_vols": first.get("data_no_dw_vols"),
+        "data_unique_bvals": first.get("data_unique_bvals"),
+        "data_vox_size": first.get("data_vox_size"),
+        "ol_flag": bool(first.get("qc_ol_flag")),
+        "par_flag": bool(first.get("qc_params_flag")),
+        "s2v_par_flag": bool(first.get("qc_s2v_params_flag")),
+        "susc_flag": bool(first.get("qc_field_flag")),
+        "cnr_flag": bool(first.get("qc_cnr_flag")),
+        "rss_flag": bool(first.get("qc_rss_flag")),
+        "qc_motion": [[db.get("qc_mot_abs"), db.get("qc_mot_rel")] for db in databases],
+        "qc_outliers": [[db.get("qc_outliers_tot")] + list(db.get("qc_outliers_b") or [])
+                        + list(db.get("qc_outliers_pe") or []) for db in databases],
+        "qc_cnr": [list(db.get("qc_cnr_avg") or []) for db in databases],
+    }
+    with open(os.path.join(outdir, "group_db.json"), "w") as fh:
+        json.dump(group, fh, indent=4, sort_keys=True)
+    with open(os.path.join(outdir, "group_qc.pdf"), "w") as fh:
+        fh.write("%%PDF-1.4 stub group report for %d subjects\n" % len(databases))
+
+    if "-u" in flags or "--update" in flags:
+        for folder in folders:
+            with open(os.path.join(folder, "qc_updated.pdf"), "w") as fh:
+                fh.write("%PDF-1.4 stub updated report\n")
 
 
 # ------------------------------------------------------------- MRtrix3 ----
@@ -474,6 +636,7 @@ DISPATCH = {
     "fslval": cmd_fslval, "fslroi": cmd_fslroi, "fslmerge": cmd_fslmerge,
     "fslmaths": cmd_fslmaths, "bet": cmd_bet, "topup": cmd_topup,
     "dtifit": cmd_dtifit, "eddy_quad": cmd_eddy_quad,
+    "eddy_squad": cmd_eddy_squad,
     "dwidenoise": cmd_passthrough, "mrdegibbs": cmd_passthrough,
     "dwibiascorrect": cmd_dwibiascorrect, "dwiextract": cmd_dwiextract,
     "mrcalc": cmd_mrcalc,
@@ -484,9 +647,11 @@ DISPATCH = {
 
 def main():
     name = os.path.basename(sys.argv[0])
-    if name.startswith("eddy"):
-        return cmd_eddy(sys.argv[1:]) if name != "eddy_quad" else cmd_eddy_quad(sys.argv[1:])
+    # Every eddy* name that is not one of the QC tools is eddy itself: the
+    # pipeline picks between eddy_openmp, eddy_cpu, eddy and eddy_cuda*.
     handler = DISPATCH.get(name)
+    if handler is None and name.startswith("eddy"):
+        handler = cmd_eddy
     if handler is None:
         sys.exit("stub: no implementation for %r" % name)
     handler(sys.argv[1:])

@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased
+
+### Group quality control (eddy SQUAD)
+
+- A second brainlife App, sharing this repository and container: `run_squad.sh`
+  runs FSL's `eddy_squad` over the eddy QC databases of a whole study, and
+  `main` routes a task to it when its config carries the group input (`eddyqc`,
+  `qc_folders`) or sets `mode: "group"`. The per-subject pipeline is unchanged.
+- Each subject now publishes `output/eddyqc/` — `qc.json`, `qc.pdf` and a
+  `squad_ready.json` carrying the subject label and a **cohort signature**. The
+  existing `qc/` bundle is untouched; the new one exists because a group task
+  stages every subject it is given, and staging hundreds of mean-b0 volumes to
+  read a 2 KB database is not worth doing.
+- The signature is what makes a group run predictable. `eddy_squad` pools
+  subjects only when `eddy` ran with the same features for all of them, and
+  raises `Eddy output inconsistency detected!` otherwise — which on brainlife is
+  easy to trip, because slice-to-volume correction depends on a GPU being
+  visible and the susceptibility field on the subject having a reverse
+  phase-encoded series. The signature records those six flags plus the shell
+  structure, so the group App buckets its inputs, reports on the largest cohort,
+  and names who it left out and why. Volume counts are deliberately left out of
+  the signature: SQUAD pools those correctly, and excluding them would discard
+  data for nothing.
+- The grouping variable is matched to subjects **by name** when given as a
+  `participants.tsv`-style table, because `eddy_squad` matches by line position
+  and a single excluded subject otherwise shifts every later value onto the
+  wrong person. A file already in SQUAD's format is passed through, and refused
+  when its value count does not match the cohort.
+- `--update` is supported: the QC databases are copied into the work directory
+  first, since brainlife stages inputs read-only and `eddy_squad -u` writes into
+  the folders it is given, and the rewritten reports are collected under each
+  subject's label.
+- `product.json` for a group task reports the cohort, the exclusions and the
+  per-subject motion, outlier and SNR distributions, worst subject first.
+- Subject and session labels are now settled once, in stage 0, and carried in
+  `state.sh`; stage 6 needs them for the QC dataset and stage 5 no longer
+  resolves them separately.
+- `docker/selftest.sh` checks `eddy_squad` and the seaborn import its study-wise
+  plots need, which `eddy_quad` never touches.
+
 ## 1.0.0
 
 First release: a containerised brainlife app for brain DWI preprocessing with

@@ -1,0 +1,14 @@
+{
+  "eddyqc": [
+    "test/input/eddyqc/sub-01",
+    "test/input/eddyqc/sub-02",
+    "test/input/eddyqc/sub-03"
+  ],
+  "grouping_variable": "",
+  "variable_name": "group",
+  "variable_is_continuous": false,
+  "update_single_subject_reports": false,
+  "require_homogeneous": false,
+  "cohort": "",
+  "min_subjects": 2
+}

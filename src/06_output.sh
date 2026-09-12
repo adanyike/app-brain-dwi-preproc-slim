@@ -7,6 +7,9 @@
 #   output/roistats/       raw           per-ROI tables
 #   output/reg/            raw           template-to-native transforms
 #   output/qc/             raw           eddy_quad report and eddy logs
+#   output/eddyqc/         raw           just qc.json, qc.pdf and the cohort
+#                                        signature -- the lean dataset a group
+#                                        SQUAD run consumes, N subjects at once
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 source "$WORK_DIR/state.sh"
@@ -25,8 +28,12 @@ ROI_STATS_DIR="${ROI_STATS_DIR:-}"
 SHELL_REPORT="${SHELL_REPORT:-}"
 EDDY_QC_DIR="${EDDY_QC_DIR:-}"
 SLSPEC="${SLSPEC:-}"
+SUBJECT="${SUBJECT:-}"
+SESSION="${SESSION:-}"
+RUN_ID="${RUN_ID:-}"
+[ -n "$SUBJECT" ] || resolve_labels
 
-mkdir -p "$OUT_DIR"/{dwi,mask,tensor,roistats,reg,qc}
+mkdir -p "$OUT_DIR"/{dwi,mask,tensor,roistats,reg,qc,eddyqc}
 
 # --------------------------------------------------------------- neuro/dwi ----
 cp "$BIAS_CORRECTED"  "$OUT_DIR/dwi/dwi.nii.gz"
@@ -97,10 +104,34 @@ for suffix in eddy_movement_rms eddy_restricted_movement_rms eddy_outlier_report
     [ -f "${EDDY_OUT}.${suffix}" ] && cp "${EDDY_OUT}.${suffix}" "$OUT_DIR/qc/" || true
 done
 
+# ------------------------------------------------------- group-QC dataset ----
+# eddy_squad reads nothing but qc.json from each subject, so the dataset a group
+# run consumes carries only that, the single-subject report, and the signature
+# saying which cohort this subject belongs to. Keeping it separate from the qc/
+# bundle above matters: a group task stages every subject it was given, and the
+# qc/ bundle carries a mean b=0 volume and the outlier maps -- hundreds of
+# megabytes to read a 2 KB database, multiplied by the size of the study.
+QC_JSON="${EDDY_QC_DIR:+$EDDY_QC_DIR/qc.json}"
+if [ -n "$QC_JSON" ] && [ -f "$QC_JSON" ]; then
+    cp "$QC_JSON" "$OUT_DIR/eddyqc/qc.json"
+    [ -f "$EDDY_QC_DIR/qc.pdf" ] && cp "$EDDY_QC_DIR/qc.pdf" "$OUT_DIR/eddyqc/qc.pdf" || true
+    python3 "$APP_DIR/python/eddyqc_summary.py" \
+        --qc-json "$OUT_DIR/eddyqc/qc.json" \
+        --subject "$SUBJECT" --session "$SESSION" --run-id "$RUN_ID" \
+        --out "$OUT_DIR/eddyqc/squad_ready.json" \
+        || warn "could not summarise the eddy QC database for group analysis"
+    SQUAD_READY="$OUT_DIR/eddyqc/squad_ready.json"
+else
+    log "no eddy_quad database -- publishing no group-QC dataset"
+    rmdir "$OUT_DIR/eddyqc" 2>/dev/null || true
+    SQUAD_READY=""
+fi
+
 # ------------------------------------------------------------- product.json ----
 PRODUCT_ARGS=(--prep "$WORK_DIR/prep/prep.json")
 [ -n "$ROI_STATS_DIR" ] && PRODUCT_ARGS+=(--roi-stats "$ROI_STATS_DIR/roi_stats.json") || true
 [ -n "$SHELL_REPORT" ] && [ -f "$SHELL_REPORT" ] && PRODUCT_ARGS+=(--shells "$SHELL_REPORT") || true
+[ -n "$SQUAD_READY" ] && [ -f "$SQUAD_READY" ] && PRODUCT_ARGS+=(--eddy-qc "$SQUAD_READY") || true
 python3 "$APP_DIR/python/make_product.py" \
     "${PRODUCT_ARGS[@]}" \
     --eddy-movement-rms "${EDDY_OUT}.eddy_movement_rms" \

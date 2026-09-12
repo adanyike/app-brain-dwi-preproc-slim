@@ -8,7 +8,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="${1:?usage: install.sh <bindir>}"
 mkdir -p "$BIN"
 
-for name in fslval fslroi fslmerge fslmaths bet topup dtifit eddy_quad \
+for name in fslval fslroi fslmerge fslmaths bet topup dtifit eddy_quad eddy_squad \
             eddy_openmp eddy_cpu eddy eddy_cuda10.2 dwidenoise mrdegibbs dwibiascorrect \
             dwiextract mrcalc \
             antsRegistrationSyN.sh antsApplyTransforms; do

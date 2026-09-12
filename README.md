@@ -99,11 +99,84 @@ volume-to-volume only and records that in the summary.
 | `roistats` | `raw` | Per-ROI statistics, tidy and wide CSV, plus JSON |
 | `reg` | `raw` | Atlas in native space and the ANTs transforms |
 | `qc` | `raw` | `eddy_quad` report, motion and outlier files, derived acquisition parameters |
+| `eddyqc` | `raw` | `qc.json`, `qc.pdf` and the cohort signature — the lean dataset the group QC App consumes |
 
 `roistats/roi_stats.csv` has one row per metric and ROI, carrying `subject`,
 `session` and `run_id` so results from many subjects can be concatenated
 directly. `roistats/<METRIC>_mean.csv` is the same data one row per subject,
 one column per ROI.
+
+## Group quality control (eddy SQUAD)
+
+`eddy_quad` assesses one subject; FSL's `eddy_squad` assesses a study, flagging
+the subjects that sit in the tail of the group's motion, outlier and CNR
+distributions. It is a separate brainlife App — it takes N subjects where the
+pipeline takes one — registered against this same repository and container:
+`main` routes a task to `run_squad.sh` when its config carries the group input,
+and to `run.sh` otherwise.
+
+Run it over the `eddyqc` datasets the pipeline published, with the App's input
+set to accept multiple datasets. brainlife then writes them into `config.json`
+as an array and describes them in `_inputs`, in the same order:
+
+```json
+{ "eddyqc": ["../5f0e.../eddyqc", "../5f0f.../eddyqc"] }
+```
+
+| Output | Contents |
+|---|---|
+| `squad/group_qc.pdf` | the study-wise report |
+| `squad/group_db.json` | the study-wise database |
+| `squad/cohorts.json` | which subjects pooled, which did not, and why |
+| `squad/subject_list.txt`, `squad/grouping_variable.txt` | exactly what `eddy_squad` was given |
+| `squad/updated/<subject>_qc_updated.pdf` | single-subject reports with the group's context, when `update_single_subject_reports` is set |
+
+Updating the single-subject reports needs each subject's own `qc.pdf`, which
+`eddy_squad` opens to append the study-wise pages to. When a pooled subject
+published no report the update is skipped, with the subject named, rather than
+losing the group report — which is what `eddy_squad` would do on its own.
+
+### Cohorts, and why a group run can refuse
+
+`eddy_squad` pools subjects only when `eddy` was run with the same features for
+all of them — it compares six flags in each `qc.json` and raises
+`Eddy output inconsistency detected!` otherwise. On brainlife every subject is
+an independently launched task, so that is easy to trip:
+
+* **no GPU on the node** → no slice-to-volume metrics (`qc_s2v_params_flag`);
+* **no reverse phase-encoded series** → no susceptibility field (`qc_field_flag`);
+* **`eddy_repol`, `eddy_cnr_maps`, `eddy_residuals` changed between submissions**
+  → no outlier, CNR or residual metrics.
+
+So each subject publishes a **cohort signature** (`eddyqc/squad_ready.json`, also
+shown on the task page): those six flags, plus the shell count and b-values,
+which must match for the group's per-shell arrays to line up. The group App
+buckets its inputs by signature, reports on the largest cohort, and names the
+subjects it left out and the reason — rather than failing on subject 37. Run it
+again with `cohort` set to another signature to report on that one too, or set
+`require_homogeneous` to refuse the split instead of choosing.
+
+Setting `require_gpu: true` across a project is the way to stop the cohort
+splitting in the first place.
+
+### Group configuration
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `eddyqc` | — | The per-subject eddy QC datasets. A path to a `qc.json`, to the folder holding it, or a list of either |
+| `grouping_variable` | — | A `participants.tsv`-style table with a subject column and one value column, matched **by subject name**; or a file already in `eddy_squad`'s own format, matched by position |
+| `variable_name` / `variable_is_continuous` | column name / `false` | Label for the variable, and whether to draw scatter plots with a regression fit (continuous) or violin plots per class (categorical) |
+| `update_single_subject_reports` | `false` | Also rewrite each subject's own report with study-wise context |
+| `cohort` | largest | The signature (or its short hash) of the cohort to report on |
+| `require_homogeneous` | `false` | Fail when the inputs split into more than one cohort, instead of choosing the largest |
+| `min_subjects` | `2` | Refuse to call a smaller group a study |
+| `subject_labels` | from the data | Comma-separated labels overriding the ones taken from `squad_ready.json` / `_inputs` |
+
+The grouping variable is matched by name wherever it can be: `eddy_squad` itself
+matches values to subjects by line position, which silently attributes one
+subject's value to another as soon as a subject is excluded from the cohort.
+Supplying a table with a subject column lets the App order the values to match
+the subject list it actually staged, and refuse when a value is missing.
 
 ## Configuration
 
@@ -136,7 +209,8 @@ of `eddy`. Without one the app completes but skips it.
 ## Running it
 
 **On brainlife**, submit the app against a diffusion dataset from the Apps page,
-or add it to a pipeline rule to process a whole project.
+or add it to a pipeline rule to process a whole project. The group QC App is
+submitted the same way, against the `eddyqc` datasets of a processed project.
 
 **Locally**, the app runs from a directory containing a `config.json` that names
 your files:
@@ -151,6 +225,10 @@ $EDITOR config.json
 `main` selects Singularity, Docker or a local toolchain automatically and passes
 a GPU through when one is present. Results appear in `output/` and
 `product.json`.
+
+For a group QC run, start from `config.json.squad.example` instead; `main`
+recognises it by its `eddyqc` input and runs `run_squad.sh`. No GPU is needed —
+it reads the QC databases, not the images.
 
 The container is pulled, not built: `main` defaults to
 `docker://nyeguh/brain-dwi-preproc-slim:1.0.0`. Point `APP_IMAGE` at another tag

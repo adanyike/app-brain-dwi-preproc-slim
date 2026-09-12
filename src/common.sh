@@ -76,6 +76,36 @@ run_identifier() {
     printf '%s' "$(basename "$PWD")"
 }
 
+# resolve_labels -- settle the subject, session and run labels, once.
+#
+# An explicit config key wins; otherwise take it from brainlife's input
+# metadata. Without this, every task labels its results "subject", and a batch
+# concatenates into one indistinguishable block. Stage 0 records the answer in
+# state.sh so that every later stage -- the ROI tables, the QC database a group
+# SQUAD run reads -- agrees on who this is.
+resolve_labels() {
+    SUBJECT="$(cfg subject "")"
+    [ -z "$SUBJECT" ] && SUBJECT="$(cfg_input_meta subject)"
+    [ -z "$SUBJECT" ] && SUBJECT="subject"
+
+    SESSION="$(cfg session "")"
+    [ -z "$SESSION" ] && SESSION="$(cfg_input_meta session)"
+
+    # Optional: pull a session off the end of the subject label (sub01-MR03 ->
+    # sub01 + MR03). Off by default -- an explicit session, or brainlife's input
+    # metadata, is always preferred to guessing from a string.
+    if [ -z "$SESSION" ] && is_true "$(cfg_bool split_subject_session false)"; then
+        local split
+        split="$(python3 "$APP_DIR/python/labels.py" --subject "$SUBJECT" --split \
+                 --session-prefixes "$(cfg session_prefixes 'ses,MR,visit,tp,V')")"
+        SUBJECT="${split%%$'\t'*}"
+        SESSION="${split#*$'\t'}"
+    fi
+
+    RUN_ID="$(run_identifier)"
+    log "labelling results: subject=$SUBJECT session=${SESSION:-<none>} run_id=$RUN_ID"
+}
+
 # cfg_list <key> <default, space separated> -- read a config value that may be
 # either a JSON array (["FA","MD"]) or a delimited string ("FA,MD"), and echo
 # it as a whitespace-separated list.

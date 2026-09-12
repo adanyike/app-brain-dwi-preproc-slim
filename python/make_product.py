@@ -94,6 +94,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--prep", required=True, help="prep.json from stage 0")
     ap.add_argument("--roi-stats", help="roi_stats.json from stage 5")
     ap.add_argument("--shells", help="shells.json from stage 3")
+    ap.add_argument("--eddy-qc", help="squad_ready.json from stage 6")
     ap.add_argument("--eddy-movement-rms", help="<eddy_base>.eddy_movement_rms")
     ap.add_argument("--eddy-binary", default="")
     ap.add_argument("--slice-to-volume", default="false")
@@ -168,6 +169,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             "Estimated motion: mean %.2f mm, peak %.2f mm RMS displacement."
             % (mean_rms, peak)})
 
+    # The group-QC signature. Saying this out loud on every task page is what
+    # makes a later SQUAD run predictable: two subjects whose signatures differ
+    # cannot be pooled, and the reason is almost always visible right here --
+    # one of them ran without a GPU, or without a reverse phase-encoded series.
+    eddy_qc = read_json(args.eddy_qc) if args.eddy_qc else {}
+    if eddy_qc:
+        flags = eddy_qc.get("eddy_flags", {})
+        off = [eddy_qc.get("flag_meanings", {}).get(name, name)
+               for name, on in sorted(flags.items()) if not on]
+        messages.append({"type": "info", "msg":
+            "Group QC: eddy cohort signature %s (%s). Only subjects sharing this "
+            "signature can be pooled by eddy_squad.%s"
+            % (eddy_qc.get("signature_hash", "?"), eddy_qc.get("signature", ""),
+               " Not available for this subject: %s." % "; ".join(off) if off else "")})
+
     empty = roi.get("empty_rois") or []
     if empty:
         messages.append({"type": "warning", "msg":
@@ -192,6 +208,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "slice_to_volume_correction": s2v,
             "shells_detected": detected,
             "tensor_shell": args.shell,
+            "eddy_qc": {k: eddy_qc[k] for k in ("signature", "signature_hash",
+                                                "eddy_flags", "protocol")
+                        if k in eddy_qc},
         },
     }
 

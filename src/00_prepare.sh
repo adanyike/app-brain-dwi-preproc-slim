@@ -205,7 +205,12 @@ fi
 cp "$CURRENT" "$PREP/dwi_prepared.nii.gz"
 
 # ------------------------------------------------------------ stage state ----
+resolve_labels
+
 cat > "$WORK_DIR/state.sh" <<EOSTATE
+SUBJECT="$SUBJECT"
+SESSION="$SESSION"
+RUN_ID="$RUN_ID"
 DWI_PREPARED="$PREP/dwi_prepared.nii.gz"
 ACQPARAMS="$PREP/acqparams.txt"
 INDEX_FILE="$PREP/index.txt"

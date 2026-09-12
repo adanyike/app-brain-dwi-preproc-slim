@@ -90,6 +90,28 @@ check "published bvecs are finite" bash -c '
         "'"$SCEN"'/output/dwi/dwi.bvecs"'
 check "the repair is reported" grep -q "restored 0 0 0 for" "$SCEN/log.txt"
 check "product.json is valid"    jq empty "$SCEN/product.json"
+# The group-QC dataset: lean enough that a study-wise task can stage hundreds of
+# subjects, and carrying the signature that says who it may be pooled with.
+check "the group-QC dataset is published" bash -c '
+    for f in qc.json qc.pdf squad_ready.json; do
+        [ -s "'"$SCEN"'/output/eddyqc/$f" ] || { echo "missing eddyqc/$f"; exit 1; }
+    done'
+check "it carries nothing heavy" bash -c '
+    [ -z "$(find "'"$SCEN"'/output/eddyqc" -name "*.nii.gz" -o -name "*.png")" ]'
+check "the subject label reached it" bash -c '
+    [ "$(jq -r .subject "'"$SCEN"'/output/eddyqc/squad_ready.json")" = "sub-dry" ]'
+check "the CPU run has no slice-to-volume metrics" bash -c '
+    [ "$(jq -r ".eddy_flags.qc_s2v_params_flag" \
+         "'"$SCEN"'/output/eddyqc/squad_ready.json")" = "false" ]'
+check "topup's field is recorded as available" bash -c '
+    [ "$(jq -r ".eddy_flags.qc_field_flag" \
+         "'"$SCEN"'/output/eddyqc/squad_ready.json")" = "true" ]'
+check "the signature reaches product.json" bash -c '
+    jq -r .provenance.eddy_qc.signature "'"$SCEN"'/product.json" | grep -q "shells="'
+check "the task page explains what cannot be pooled" bash -c '
+    jq -r ".brainlife[].msg // empty" "'"$SCEN"'/product.json" \
+    | grep -q "Group QC: eddy cohort signature"'
+CPU_SIGNATURE="$(jq -r .signature "$SCEN/output/eddyqc/squad_ready.json")"
 
 # ---------------------------------------------------------------------------
 scenario "2-cuda-s2v" "$ROOT/bin-gpu" '{"eddy_binary":"eddy_cuda10.2"}'
@@ -100,6 +122,15 @@ check "outlier replacement on"  grep -q -- "--repol" <<< "$(eddy_cmd)"
 check "group-wise outliers on GPU" grep -q -- "--ol_type=both" <<< "$(eddy_cmd)"
 check "product reports s2v"     bash -c '[ "$(jq -r .provenance.slice_to_volume_correction "'"$SCEN"'/product.json")" = "true" ]'
 check "slspec published to qc"  test -s "$SCEN/output/qc/slspec.txt"
+check "the s2v run records s2v QC metrics" bash -c '
+    [ "$(jq -r ".eddy_flags.qc_s2v_params_flag" \
+         "'"$SCEN"'/output/eddyqc/squad_ready.json")" = "true" ]'
+# The trap a group analysis walks into: the same data processed with and without
+# a GPU yields QC databases eddy_squad refuses to pool, and the signature is
+# what lets the group App notice before it tries.
+check "GPU and CPU runs land in different cohorts" bash -c '
+    [ "$(jq -r .signature "'"$SCEN"'/output/eddyqc/squad_ready.json")" \
+      != "'"$CPU_SIGNATURE"'" ]'
 
 # ---------------------------------------------------------------------------
 # An odd slice count is no longer special: nothing is cropped, so the measured

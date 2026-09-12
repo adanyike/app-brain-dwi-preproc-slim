@@ -26,19 +26,20 @@ run() {  # run <label> <command...>
 }
 
 # ------------------------------------------------------------ static checks ----
-run "bash syntax" bash -c 'for f in main run.sh src/*.sh test/*.sh; do bash -n "$f" || exit 1; done'
+run "bash syntax" bash -c 'for f in main run.sh run_squad.sh src/*.sh test/*.sh; do bash -n "$f" || exit 1; done'
 run "python syntax" bash -c 'for f in python/*.py test/*.py; do python3 -m py_compile "$f" || exit 1; done'
 run "config.json.example is valid JSON" jq empty config.json.example
+run "config.json.squad.example is valid JSON" jq empty config.json.squad.example
 run "package.json is valid JSON" jq empty package.json
 run "atlas label metadata is valid JSON" jq empty templates/JHU-ICBM-labels.json
-run "entrypoints are executable" bash -c '[ -x main ] && [ -x run.sh ]'
+run "entrypoints are executable" bash -c '[ -x main ] && [ -x run.sh ] && [ -x run_squad.sh ]'
 run "templates are present" bash -c '
     for f in JHU-ICBM-FA-1mm.nii.gz JHU-ICBM-labels.json philips_84_slices_slspec.txt; do
         [ -s "templates/$f" ] || { echo "missing templates/$f"; exit 1; }
     done'
 
 if command -v shellcheck >/dev/null 2>&1; then
-    SHELLCHECK_TARGETS=(main run.sh src/*.sh)
+    SHELLCHECK_TARGETS=(main run.sh run_squad.sh src/*.sh)
     # The slim variant adds container build helpers.
     [ -d docker ] && SHELLCHECK_TARGETS+=(docker/*.sh)
     run "shellcheck" shellcheck -S warning -x "${SHELLCHECK_TARGETS[@]}"
@@ -62,6 +63,9 @@ run "shells"          python3 test/test_shells.py -q
 run "labels"          python3 test/test_labels.py -q
 run "rotated_bvecs"   python3 test/test_rotated_bvecs.py -q
 run "make_product"    python3 test/test_make_product.py -q
+run "eddyqc_summary"  python3 test/test_eddyqc_summary.py -q
+run "squad_inputs"    python3 test/test_squad_inputs.py -q
+run "make_group_product" python3 test/test_make_group_product.py -q
 if python3 -c 'import numpy, nibabel' 2>/dev/null; then
     run "roi_stats"   python3 test/test_roi_stats.py -q
 else
@@ -73,6 +77,7 @@ fi
 # Skip with --no-dryrun when iterating on the unit tests alone.
 if [ "${1:-}" != "--no-dryrun" ] && python3 -c 'import numpy, nibabel' 2>/dev/null; then
     run "pipeline dry run (stub toolchain)" bash test/dryrun.sh
+    run "group QC dry run (stub toolchain)" bash test/squad_dryrun.sh
 else
     printf '\n=== pipeline dry run ===\n  skipped\n'
 fi

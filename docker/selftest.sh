@@ -205,6 +205,36 @@ else
     echo "  skip  eddy_quad not installed; set eddy_qc=false in config.json"
 fi
 
+# The study-wise half of the same toolkit, used by run_squad.sh rather than the
+# per-subject pipeline. It imports seaborn, which eddy_quad never does, so the
+# check above would pass on an image whose group QC dies at run time.
+if command -v eddy_squad >/dev/null 2>&1; then
+    check_runs eddy_squad --help
+    CHECKED=$((CHECKED + 1))
+    FSL_PYTHON="${FSLDIR:-/opt/fsl}/bin/python"
+    if [ ! -x "$FSL_PYTHON" ]; then
+        fail "eddy_squad dependencies" "FSL's python is missing at $FSL_PYTHON"
+    else
+        missing_mods="$("$FSL_PYTHON" - <<'PYEOF' 2>/dev/null
+missing = []
+for module in ("seaborn", "pandas", "matplotlib", "numpy"):
+    try:
+        __import__(module)
+    except Exception:
+        missing.append(module)
+print(",".join(missing))
+PYEOF
+)"
+        if [ -z "$missing_mods" ]; then
+            pass "eddy_squad dependencies (seaborn, pandas, matplotlib, numpy)"
+        else
+            fail "eddy_squad dependencies" "FSL python cannot import: $missing_mods"
+        fi
+    fi
+else
+    echo "  skip  eddy_squad not installed; this image cannot run group QC"
+fi
+
 echo "MRtrix3"
 for tool in mrinfo mrconvert mrcalc mrmath mrstats dwiextract dwidenoise mrdegibbs dwi2mask; do
     check_runs "$tool" -help
