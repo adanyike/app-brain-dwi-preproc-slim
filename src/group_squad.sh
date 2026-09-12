@@ -49,6 +49,9 @@ log "pooling $N_SUBJECTS subject(s) from $LIST_FILE"
 SQUAD_OUT="$SQUAD_WORK/squad"
 rm -rf "$SQUAD_OUT"
 
+# Order matters: eddy_squad parses with argparse and declares --update as
+# nargs="?", so anything following it is taken as its value. The subject list
+# goes first and --update last, or the list disappears into the update option.
 SQUAD_ARGS=("$LIST_FILE" --output-dir "$SQUAD_OUT")
 if [ -n "$VARIABLE_FILE" ] && [ -s "$VARIABLE_FILE" ]; then
     log "grouping variable: $(head -1 "$VARIABLE_FILE") ($(sed -n 2p "$VARIABLE_FILE" | grep -q 1 && echo continuous || echo categorical))"

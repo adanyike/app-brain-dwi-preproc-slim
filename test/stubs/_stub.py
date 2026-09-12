@@ -359,15 +359,18 @@ def cmd_eddy_squad(argv):
     QC index is one row per subject in list order -- plus --update writing
     qc_updated.pdf back into each listed folder.
     """
-    positional = [a for a in argv if not a.startswith("-")]
     flags = [a for a in argv if a.startswith("-")]
     outdir = option(argv, "--output-dir", "-o") or "squad"
     grouping = option(argv, "--grouping", "-g")
-    # option() consumed the values; what remains positional is the list file.
-    consumed = {option(argv, "--output-dir", "-o"), grouping}
-    positional = [p for p in positional if p not in consumed]
+    # Real eddy_squad parses with argparse, where --update is nargs="?" -- so a
+    # token following it is swallowed as its value, and a caller who puts the
+    # subject list after --update loses it.  Model that, or the argument order
+    # this depends on is untested.
+    update_value = option(argv, "--update", "-u")
+    consumed = {option(argv, "--output-dir", "-o"), grouping, update_value}
+    positional = [a for a in argv if not a.startswith("-") and a not in consumed]
     if not positional:
-        sys.exit("eddy_squad: no subject list given")
+        sys.exit("eddy_squad: no subject list given (argparse: --update swallowed it?)")
 
     with open(positional[0]) as fh:
         folders = [line.strip() for line in fh if line.strip()]

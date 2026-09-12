@@ -28,6 +28,26 @@ setup_threads
 
 check_tools jq python3 eddy_squad
 
+# eddy_squad draws its study-wise plots with seaborn, which eddy_quad never
+# imports -- so an image trimmed against the per-subject pipeline can carry a
+# working eddy_quad and an eddy_squad that dies at the plotting step, after the
+# staging work is done. Check it up front, under FSL's own interpreter.
+FSL_PYTHON="${FSLDIR:-/opt/fsl}/bin/python"
+if [ -x "$FSL_PYTHON" ]; then
+    MISSING_MODS="$("$FSL_PYTHON" - <<'EOPY' 2>/dev/null
+missing = []
+for module in ("seaborn", "pandas", "matplotlib", "numpy"):
+    try:
+        __import__(module)
+    except Exception:
+        missing.append(module)
+print(",".join(missing))
+EOPY
+)"
+    [ -z "$MISSING_MODS" ] || \
+        die "eddy_squad needs these python modules and FSL's interpreter cannot import them: $MISSING_MODS. Install them into $FSL_PYTHON's environment, or use an image whose FSL is intact."
+fi
+
 log "group QC start"
 T0="$(date +%s)"
 

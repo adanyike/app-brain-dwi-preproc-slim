@@ -288,6 +288,20 @@ check "and checked the group output, not the tensor" bash -c '
     ! grep -q "output/tensor/fa.nii.gz was not produced" "'"$SCEN"'/log.txt"'
 check "the group outputs are there" test -s "$SCEN/output/squad/group_db.json"
 
+# ---------------------------------------------------------------------------
+# A negative control for the checks above: eddy_squad parses with argparse and
+# --update is nargs="?", so a subject list placed after it is swallowed as its
+# value. If the stub did not model that, the argument order the group stage
+# depends on would be untested.
+printf '\n--- 7-argument-order-is-load-bearing ---\n'
+( cd "$ROOT" && PATH="$BIN:$PATH" eddy_squad --update "$ROOT/6-dispatch/work/squad/list.txt" \
+    --output-dir "$ROOT/7-order/squad" ) > "$ROOT/order.txt" 2>&1
+check "the list after --update is lost, as argparse would lose it" test $? -ne 0
+check "and the stub says why" grep -q "no subject list given" "$ROOT/order.txt"
+( cd "$ROOT" && PATH="$BIN:$PATH" eddy_squad "$ROOT/6-dispatch/work/squad/list.txt" \
+    --output-dir "$ROOT/7-order/squad" --update ) > "$ROOT/order-ok.txt" 2>&1
+check "the order the group stage uses works" test $? -eq 0
+
 printf '\n----------------------------------------\n'
 printf 'squad_dryrun.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
