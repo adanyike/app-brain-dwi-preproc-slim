@@ -139,14 +139,20 @@ if [ ! -f "$APP_LABELS" ] || [ ! -f "$FSL_ATLASES/JHU-labels.xml" ]; then
     fail "JHU label metadata" "cannot compare: $APP_LABELS or the FSL label list is missing"
 else
     app_n="$(jq -r '.labels | length' "$APP_LABELS")"
-    fsl_n="$(grep -c '<label ' "$FSL_ATLASES/JHU-labels.xml")"
-    max_label="$(fslstats "$FSL_LABELS" -R \
-                 | awk '{printf "%d", $2 + 0.5}')"
-    if [ "$app_n" = "$fsl_n" ] && [ "$app_n" = "$max_label" ]; then
+    # In FSL's label list the index attribute *is* the voxel value, and index 0
+    # is the "Unclassified" background rather than a region -- so the region
+    # count is the number of non-zero indices, not the number of <label>
+    # elements, and the highest index is the top voxel value.
+    fsl_indices="$(sed -n 's/.*<label index="\([0-9]*\)".*/\1/p' \
+                   "$FSL_ATLASES/JHU-labels.xml")"
+    fsl_n="$(printf '%s\n' "$fsl_indices" | grep -vc '^0$' || true)"
+    fsl_max="$(printf '%s\n' "$fsl_indices" | sort -n | tail -1)"
+    max_label="$(fslstats "$FSL_LABELS" -R | awk '{printf "%d", $2 + 0.5}')"
+    if [ "$app_n" = "$fsl_n" ] && [ "$app_n" = "$fsl_max" ] && [ "$app_n" = "$max_label" ]; then
         pass "JHU label metadata ($app_n ROIs, matching FSL's label list and image)"
     else
         fail "JHU label metadata" \
-             "templates/JHU-ICBM-labels.json has $app_n ROIs, JHU-labels.xml has $fsl_n, the label image goes up to $max_label"
+             "templates/JHU-ICBM-labels.json has $app_n ROIs, JHU-labels.xml describes $fsl_n (highest index $fsl_max), the label image goes up to $max_label"
     fi
 fi
 
