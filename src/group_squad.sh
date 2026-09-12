@@ -84,7 +84,17 @@ if is_true "$UPDATE_REPORTS"; then
 fi
 
 log "running: eddy_squad ${SQUAD_ARGS[*]}"
-eddy_squad "${SQUAD_ARGS[@]}" || die "eddy_squad failed; see the log above"
+if ! eddy_squad "${SQUAD_ARGS[@]}" 2>&1 | tee "$SQUAD_WORK/eddy_squad.log"; then
+    # A refusal here means SQUAD compares something the cohort signature does
+    # not, which a traceback naming one field is not enough to act on. Say which
+    # fields actually differ, and between whom.
+    if grep -qi "inconsistency detected" "$SQUAD_WORK/eddy_squad.log"; then
+        warn "eddy_squad refused this cohort. Comparing every eddy input field across the staged subjects:"
+        python3 "$APP_DIR/python/squad_inputs.py" --diagnose "$LIST_FILE" || true
+    fi
+    cp "$COHORTS" "$OUT_DIR/squad/cohorts.json" 2>/dev/null || true
+    die "eddy_squad failed; see the log above"
+fi
 
 [ -f "$SQUAD_OUT/group_db.json" ] || die "eddy_squad produced no group_db.json"
 

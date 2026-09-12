@@ -13,6 +13,9 @@ BASE = {
     "data_no_dw_vols": 16, "data_no_b0_vols": 4, "data_no_PE_dirs": 2,
     "data_no_shells": 2, "data_unique_bvals": [1500, 3000],
     "data_vox_size": [2.0, 2.0, 2.0],
+    "data_protocol": [[1500, 8], [3000, 8]],
+    "data_unique_pes": [[0, 1, 0], [0, -1, 0]],
+    "data_eddy_para": [[0, 1, 0, 0.0959], [0, -1, 0, 0.0959]],
     "qc_mot_abs": 0.4, "qc_mot_rel": 0.2, "qc_outliers_tot": 1.0,
     "qc_params_flag": True, "qc_s2v_params_flag": True, "qc_field_flag": True,
     "qc_ol_flag": True, "qc_cnr_flag": True, "qc_rss_flag": False,
@@ -241,6 +244,39 @@ class TestCohorts(StagingCase):
         report = self.run_staging(self.config(self.heterogeneous()))
         self.assertIn("slice-to-volume", report["excluded"][0]["reason"])
 
+    def test_differing_acquisition_parameters_split_the_cohort(self):
+        # The real failure: same eddy options, different readout time. SQUAD
+        # compares the eddy input data and refuses the study over it.
+        other = [[0, 1, 0, 0.1043], [0, -1, 0, 0.1043]]
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"}),
+                   self.dataset("c", qc(data_eddy_para=other),
+                                summary={"subject": "c"})]
+        report = self.run_staging(self.config(folders))
+        self.assertEqual(report["chosen"]["subjects"], ["a", "b"])
+        self.assertIn("topup acquisition parameters", report["excluded"][0]["reason"])
+        self.assertIn("0.1043", report["excluded"][0]["reason"])
+
+    def test_the_comparison_is_exact(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"}),
+                   self.dataset("c", qc(data_unique_bvals=[1495, 3000]),
+                                summary={"subject": "c"})]
+        report = self.run_staging(self.config(folders))
+        self.assertEqual(report["excluded"][0]["subjects"], ["c"])
+        self.assertIn("shell b-values", report["excluded"][0]["reason"])
+
+    def test_signature_fields_can_narrow_what_is_compared(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"}),
+                   self.dataset("c", qc(data_no_dw_vols=15), summary={"subject": "c"})]
+        self.assertEqual(
+            len(self.run_staging(self.config(folders))["excluded"]), 1)
+        report = self.run_staging(self.config(
+            folders, signature_fields="data_no_shells data_unique_bvals"))
+        self.assertEqual(report["chosen"]["n_subjects"], 3)
+        self.assertEqual(report["excluded"], [])
+
     def test_a_differing_protocol_is_explained_too(self):
         folders = [self.dataset("a", qc(), summary={"subject": "a"}),
                    self.dataset("b", qc(), summary={"subject": "b"}),
@@ -277,6 +313,51 @@ class TestCohorts(StagingCase):
         first = self.run_staging(self.config(folders))
         second = self.run_staging(self.config(list(reversed(folders))))
         self.assertEqual(first["chosen"]["signature"], second["chosen"]["signature"])
+
+
+class TestDiagnose(StagingCase):
+    """The fallback for a refusal this app did not predict."""
+
+    def list_file(self, databases):
+        listing = os.path.join(self.root, "list.txt")
+        with open(listing, "w") as fh:
+            for name, database in databases.items():
+                folder = os.path.join(self.root, "staged", name)
+                os.makedirs(folder, exist_ok=True)
+                with open(os.path.join(folder, "qc.json"), "w") as out:
+                    json.dump(database, out)
+                fh.write(folder + "\n")
+        return listing
+
+    def diagnose(self, databases):
+        from contextlib import redirect_stderr
+        import io
+        captured = io.StringIO()
+        with redirect_stderr(captured):
+            status = si.main(["--diagnose", self.list_file(databases)])
+        return status, captured.getvalue()
+
+    def test_names_the_field_and_who_holds_which_value(self):
+        status, output = self.diagnose({
+            "sub-01": qc(), "sub-02": qc(),
+            "sub-03": qc(data_eddy_para=[[0, 1, 0, 0.1043]]),
+        })
+        self.assertEqual(status, 0)
+        self.assertIn("data_eddy_para", output)
+        self.assertIn("topup acquisition parameters", output)
+        self.assertIn("sub-03", output)
+        self.assertIn("signature_fields", output)
+
+    def test_says_so_when_nothing_differs(self):
+        _, output = self.diagnose({"sub-01": qc(), "sub-02": qc()})
+        self.assertIn("every eddy input field matches", output)
+
+    def test_ignores_per_subject_file_paths(self):
+        _, output = self.diagnose({
+            "sub-01": qc(data_file_eddy="/a/eddy_corrected"),
+            "sub-02": qc(data_file_eddy="/b/eddy_corrected"),
+        })
+        self.assertIn("every eddy input field matches", output)
 
 
 class TestStaging(StagingCase):

@@ -14,6 +14,9 @@ FULL = {
     "data_no_dw_vols": 16, "data_no_b0_vols": 4, "data_no_PE_dirs": 2,
     "data_no_shells": 2, "data_unique_bvals": [1500, 3000],
     "data_vox_size": [2.0, 2.0, 2.0],
+    "data_protocol": [[1500, 8], [3000, 8]],
+    "data_unique_pes": [[0, 1, 0], [0, -1, 0]],
+    "data_eddy_para": [[0, 1, 0, 0.0959], [0, -1, 0, 0.0959]],
     "qc_mot_abs": 0.42, "qc_mot_rel": 0.19,
     "qc_params_flag": True, "qc_s2v_params_flag": True, "qc_field_flag": True,
     "qc_ol_flag": True, "qc_cnr_flag": True, "qc_rss_flag": False,
@@ -47,7 +50,7 @@ class TestFlags(unittest.TestCase):
 
 class TestSignature(unittest.TestCase):
     def signature(self, qc):
-        return es.signature_of(es.flags_of(qc), es.protocol_of(qc))
+        return es.signature_of(es.flags_of(qc), es.acquisition_of(qc))
 
     def test_identical_runs_share_a_signature(self):
         self.assertEqual(self.signature(FULL), self.signature(dict(FULL)))
@@ -68,26 +71,40 @@ class TestSignature(unittest.TestCase):
                             self.signature(without(data_no_shells=1,
                                                    data_unique_bvals=[1500])))
 
-    def test_a_dropped_volume_does_not_split_the_cohort(self):
-        # SQUAD pools these correctly, so excluding the subject would throw
-        # away data for nothing.
-        self.assertEqual(self.signature(FULL),
-                         self.signature(without(data_no_dw_vols=15)))
+    def test_differing_acquisition_parameters_split_the_cohort(self):
+        # What a real study hit: identical eddy options, a different readout
+        # time. Newer FSL compares the eddy input data and refuses the study
+        # over exactly this.
+        other = without(data_eddy_para=[[0, 1, 0, 0.1043], [0, -1, 0, 0.1043]])
+        self.assertNotEqual(self.signature(FULL), self.signature(other))
 
-    def test_b_values_are_rounded_to_the_nearest_50(self):
-        self.assertEqual(self.signature(FULL),
-                         self.signature(without(data_unique_bvals=[1495, 3005])))
+    def test_the_comparison_is_exact_because_squad_s_is(self):
+        # Rounding 1495 and 1500 together would pool subjects that SQUAD then
+        # rejects -- failing the whole study instead of splitting one cohort.
+        self.assertNotEqual(self.signature(FULL),
+                            self.signature(without(data_unique_bvals=[1495, 3000])))
+
+    def test_a_dropped_volume_splits_the_cohort_too(self):
+        self.assertNotEqual(self.signature(FULL),
+                            self.signature(without(data_no_dw_vols=15)))
+
+    def test_the_key_can_be_narrowed_when_a_difference_is_tolerated(self):
+        narrow = ("data_no_shells", "data_no_PE_dirs")
+        self.assertEqual(
+            es.signature_of(es.flags_of(FULL), es.acquisition_of(FULL, narrow)),
+            es.signature_of(es.flags_of(without(data_no_dw_vols=15)),
+                            es.acquisition_of(without(data_no_dw_vols=15), narrow)))
 
     def test_the_enabled_features_are_readable_in_the_signature(self):
         signature = self.signature(FULL)
         self.assertIn("params", signature)
         self.assertIn("s2v_params", signature)
-        self.assertIn("shells=2", signature)
-        self.assertIn("bvals=1500,3000", signature)
+        self.assertIn("data_no_shells=2", signature)
+        self.assertIn("data_unique_bvals=[1500,3000]", signature)
 
     def test_a_run_with_nothing_enabled_still_has_a_signature(self):
         bare = {name: False for name in es.SQUAD_FLAGS}
-        self.assertIn("flags=none", es.signature_of(bare, es.protocol_of({})))
+        self.assertIn("flags=none", es.signature_of(bare, es.acquisition_of({})))
 
 
 class TestSummary(unittest.TestCase):

@@ -39,6 +39,39 @@ SQUAD_FLAGS = (
     "qc_rss_flag",
 )
 
+# The acquisition fields SQUAD compares across subjects before it will build a
+# group database, alongside the flags. When they differ it refuses the whole
+# study -- "Inconsistency detected in eddy input data in <description>!" -- so
+# the cohort signature has to be at least as strict as this comparison, and
+# compare the values *exactly*. Rounding here (b-values to the nearest shell,
+# say) would pool subjects that SQUAD then rejects, which is the one outcome
+# worse than splitting a cohort.
+ACQUISITION_FIELDS = (
+    "data_no_shells",
+    "data_unique_bvals",
+    "data_no_PE_dirs",
+    "data_unique_pes",
+    "data_eddy_para",
+    "data_protocol",
+    "data_vox_size",
+    "data_no_dw_vols",
+    "data_no_b0_vols",
+)
+
+# SQUAD names these in its own error message; naming them the same way lets a
+# reader connect a cohort split to the refusal it prevented.
+FIELD_MEANING = {
+    "data_no_shells": "number of shells",
+    "data_unique_bvals": "shell b-values",
+    "data_no_PE_dirs": "number of phase-encode directions",
+    "data_unique_pes": "phase-encode directions",
+    "data_eddy_para": "topup acquisition parameters",
+    "data_protocol": "acquisition protocol (volumes per shell)",
+    "data_vox_size": "voxel size",
+    "data_no_dw_vols": "number of diffusion-weighted volumes",
+    "data_no_b0_vols": "number of b=0 volumes",
+}
+
 # What each flag means in terms of this pipeline, so a task page can say why a
 # subject will not pool with the others rather than just naming a JSON key.
 FLAG_MEANING = {
@@ -86,14 +119,18 @@ def as_number_list(value: Any) -> List[float]:
     return out
 
 
-def round_bvals(values: Sequence[float]) -> List[int]:
-    """Shell b-values, to the nearest 50, so 1495 and 1500 are one shell.
+def canonical(value: Any) -> str:
+    """A value rendered so that two equal values always render identically."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
-    QUAD copies eddy's unique b-values straight out of the bvals file, and a
-    scanner that writes 1495 for one subject and 1500 for the next would
-    otherwise split an otherwise identical cohort in two.
+
+def acquisition_of(qc: dict, fields: Sequence[str] = ACQUISITION_FIELDS) -> Dict[str, Any]:
+    """The acquisition description SQUAD insists is identical across subjects.
+
+    Values are taken raw, exactly as QUAD wrote them: SQUAD compares them with
+    no tolerance, so neither can we.
     """
-    return sorted({int(round(v / 50.0)) * 50 for v in values})
+    return {name: qc.get(name) for name in fields}
 
 
 def flags_of(qc: dict) -> Dict[str, bool]:
@@ -101,37 +138,38 @@ def flags_of(qc: dict) -> Dict[str, bool]:
 
 
 def protocol_of(qc: dict) -> Dict[str, Any]:
-    unique = round_bvals(as_number_list(qc.get("data_unique_bvals")))
+    """The same acquisition, named for a human reading the task page."""
     return {
         "n_shells": qc.get("data_no_shells"),
-        "unique_bvals": unique,
+        "unique_bvals": as_number_list(qc.get("data_unique_bvals")),
         "n_dw_volumes": qc.get("data_no_dw_vols"),
         "n_b0_volumes": qc.get("data_no_b0_vols"),
         "n_pe_directions": qc.get("data_no_PE_dirs"),
-        "voxel_size_mm": [round(v, 4) for v in as_number_list(qc.get("data_vox_size"))],
+        "voxel_size_mm": as_number_list(qc.get("data_vox_size")),
+        "acquisition_parameters": qc.get("data_eddy_para"),
     }
 
 
-def signature_of(flags: Dict[str, bool], protocol: Dict[str, Any]) -> str:
+def signature_of(flags: Dict[str, bool], acquisition: Dict[str, Any]) -> str:
     """The cohort key: what must match for SQUAD to pool these subjects.
 
-    Flags because SQUAD compares them itself and raises otherwise. Shell count,
-    shell b-values and phase-encode directions because SQUAD takes the protocol
-    from whichever subject happens to be listed first and stacks the per-shell
-    CNR and outlier arrays on top of each other -- differing shells there are
-    not an error, they are a silently mislabelled group report.
+    Both halves mirror a check SQUAD makes for itself. The flags, because it
+    compares them and raises "Eddy output inconsistency detected!". The
+    acquisition fields, because it compares those too and raises "Inconsistency
+    detected in eddy input data in <description>!" -- and because it takes the
+    protocol from whichever subject is listed first and stacks the per-shell CNR
+    and outlier arrays on top of each other, so a difference it happened not to
+    check would be a silently mislabelled group report rather than an error.
 
-    Volume counts are deliberately *not* in the key. A subject with a dropped
-    volume still pools correctly; excluding it would throw away data over
-    something SQUAD handles.
+    Values are compared exactly, because SQUAD compares them exactly. A key that
+    is more forgiving than the tool it feeds pools subjects the tool then
+    refuses, which fails the whole study instead of one cohort.
     """
     enabled = ",".join(name[3:-5] for name in SQUAD_FLAGS if flags[name]) or "none"
-    return "|".join([
-        "flags=" + enabled,
-        "shells=%s" % protocol["n_shells"],
-        "bvals=" + ",".join(str(b) for b in protocol["unique_bvals"]),
-        "pedirs=%s" % protocol["n_pe_directions"],
-    ])
+    parts = ["flags=" + enabled]
+    parts.extend("%s=%s" % (name, canonical(value))
+                 for name, value in sorted(acquisition.items()))
+    return "|".join(parts)
 
 
 def metrics_of(qc: dict) -> Dict[str, Any]:
@@ -146,16 +184,20 @@ def metrics_of(qc: dict) -> Dict[str, Any]:
     }
 
 
-def summarise(qc: dict, labels: Dict[str, str]) -> Dict[str, Any]:
+def summarise(qc: dict, labels: Dict[str, str],
+              fields: Sequence[str] = ACQUISITION_FIELDS) -> Dict[str, Any]:
     flags = flags_of(qc)
     protocol = protocol_of(qc)
-    signature = signature_of(flags, protocol)
+    acquisition = acquisition_of(qc, fields)
+    signature = signature_of(flags, acquisition)
     summary: Dict[str, Any] = dict(labels)
     summary.update({
         "squad_ready": bool(qc),
         "eddy_flags": flags,
         "flag_meanings": {name: FLAG_MEANING[name] for name in SQUAD_FLAGS},
         "protocol": protocol,
+        "acquisition": acquisition,
+        "field_meanings": {name: FIELD_MEANING.get(name, name) for name in fields},
         "signature": signature,
         "signature_hash": hashlib.sha1(signature.encode()).hexdigest()[:8],
         "metrics": metrics_of(qc),

@@ -24,23 +24,26 @@ check() {  # check <description> <condition-command...>
     else FAIL=$((FAIL + 1)); note "FAIL -- $1"; fi
 }
 
-# qc_dataset <dir> <subject> <s2v true|false> [field true|false]
+# qc_dataset <dir> <subject> <s2v true|false> [field true|false] [readout]
 #
 # One per-subject eddy QC dataset, laid out the way stage 6 publishes it: the
 # QUAD database, the single-subject report, and the signature that says which
 # cohort the subject belongs to.
 qc_dataset() {
-    local dir="$1" subject="$2" s2v="$3" field="${4:-true}"
+    local dir="$1" subject="$2" s2v="$3" field="${4:-true}" readout="${5:-0.0959}"
     mkdir -p "$dir"
-    python3 - "$dir" "$subject" "$s2v" "$field" <<'EOPY'
+    python3 - "$dir" "$subject" "$s2v" "$field" "$readout" <<'EOPY'
 import json, os, subprocess, sys
-directory, subject, s2v, field = sys.argv[1:5]
+directory, subject, s2v, field, readout = sys.argv[1:6]
 app = os.environ["APP"]
 qc = {
     "data_file_eddy": "/work/%s/eddy_corrected" % subject,
     "data_no_dw_vols": 16, "data_no_b0_vols": 4, "data_no_PE_dirs": 2,
     "data_no_shells": 2, "data_unique_bvals": [1500, 3000],
     "data_vox_size": [2.0, 2.0, 2.0],
+    "data_protocol": [[1500, 8], [3000, 8]],
+    "data_unique_pes": [[0, 1, 0], [0, -1, 0]],
+    "data_eddy_para": [[0, 1, 0, float(readout)], [0, -1, 0, float(readout)]],
     "qc_mot_abs": 0.3 + 0.1 * len(subject), "qc_mot_rel": 0.1,
     "qc_outliers_tot": 1.0 + len(subject), "qc_vox_displ_std": 0.7,
     "qc_params_flag": True, "qc_ol_flag": True, "qc_cnr_flag": True,
@@ -171,6 +174,80 @@ check "product.json still renders the error" bash -c '
     | grep -q "incompatible"'
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# The same trap from the other direction: identical eddy options, but a
+# different readout time in the acquisition parameters. Newer FSL compares the
+# eddy *input* data too and refuses the study over it, so the cohort key has to
+# be at least as strict -- and exact, since SQUAD does not round.
+printf '\n--- 2d-different-acquisition-parameters ---\n'
+SCEN="$ROOT/2d-acqparams"
+mkdir -p "$SCEN"
+for index in 1 2 3; do
+    qc_dataset "$SCEN/input/sub-0$index" "sub-0$index" true true 0.0959
+done
+for index in 4 5; do
+    qc_dataset "$SCEN/input/sub-0$index" "sub-0$index" true true 0.1043
+done
+group_config "$SCEN/config.json" '{}' "$SCEN"/input/sub-0*
+( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run_squad.sh" ) \
+    > "$SCEN/log.txt" 2>&1
+STATUS=$?
+check "a readout-time difference does not fail the task" test "$STATUS" -eq 0
+[ "$STATUS" -eq 0 ] || tail -20 "$SCEN/log.txt"
+check "the protocols were split into cohorts" bash -c '
+    [ "$(jq -r ".chosen.n_subjects" "'"$SCEN"'/output/squad/cohorts.json")" = "3" ]'
+check "the reason names the acquisition parameters" bash -c '
+    jq -r ".excluded[0].reason" "'"$SCEN"'/output/squad/cohorts.json" \
+    | grep -q "topup acquisition parameters"'
+check "and shows both values" bash -c '
+    jq -r ".excluded[0].reason" "'"$SCEN"'/output/squad/cohorts.json" | grep -q "0.1043"'
+check "eddy_squad never saw the mixture" bash -c '
+    ! grep -qi "inconsistency detected" "'"$SCEN"'/log.txt"'
+
+# A shell b-value that differs by 5 is a different cohort too: SQUAD compares
+# these exactly, so rounding them together here would fail the whole study.
+printf '\n--- 2e-near-identical-bvalues ---\n'
+SCEN="$ROOT/2e-bvals"
+mkdir -p "$SCEN"
+for index in 1 2 3; do
+    qc_dataset "$SCEN/input/sub-0$index" "sub-0$index" true
+done
+for index in 4; do
+    qc_dataset "$SCEN/input/sub-0$index" "sub-0$index" true
+    python3 - "$SCEN/input/sub-04/qc.json" <<'EOPY'
+import json, sys
+path = sys.argv[1]
+qc = json.load(open(path))
+qc["data_unique_bvals"] = [1495, 3000]
+json.dump(qc, open(path, "w"), indent=4)
+EOPY
+done
+group_config "$SCEN/config.json" '{}' "$SCEN"/input/sub-0*
+( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run_squad.sh" ) \
+    > "$SCEN/log.txt" 2>&1
+check "the task succeeds" test $? -eq 0
+check "b=1495 is its own cohort" bash -c '
+    [ "$(jq -r ".excluded[0].subjects | join(\",\")" \
+         "'"$SCEN"'/output/squad/cohorts.json")" = "sub-04" ]'
+check "the reason names the b-values" bash -c '
+    jq -r ".excluded[0].reason" "'"$SCEN"'/output/squad/cohorts.json" | grep -q "b-values"'
+
+# ...and the study can be pooled anyway, by narrowing what the cohort key
+# compares -- for a difference this FSL turns out to tolerate.
+SCEN2="$ROOT/2f-narrowed-signature"
+mkdir -p "$SCEN2"
+jq '. + {signature_fields: "data_no_shells data_no_PE_dirs"}' "$SCEN/config.json" \
+    > "$SCEN2/config.json"
+( cd "$SCEN2" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run_squad.sh" ) \
+    > "$SCEN2/log.txt" 2>&1
+check "narrowing signature_fields pools them again" bash -c '
+    [ "$(jq -r ".chosen.n_subjects" "'"$SCEN2"'/output/squad/cohorts.json" 2>/dev/null)" = "4" ]'
+# The stub refuses it, exactly as the real tool would -- and the diagnostic runs.
+check "the refusal is diagnosed, not just reported" \
+    grep -q "differs across subjects" "$SCEN2/log.txt"
+check "the diagnosis names the field" grep -q "data_unique_bvals" "$SCEN2/log.txt"
+check "and says how to split them" grep -q "signature_fields" "$SCEN2/log.txt"
+
 printf '\n--- 3-grouping-variable-and-update ---\n'
 SCEN="$ROOT/3-grouping"
 mkdir -p "$SCEN"

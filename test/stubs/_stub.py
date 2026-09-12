@@ -393,6 +393,14 @@ def cmd_eddy_squad(argv):
         if len({bool(db.get(name)) for db in databases}) > 1:
             sys.exit("ValueError: Eddy output inconsistency detected!")
 
+    # Newer FSL releases compare the eddy *input* data as well, and refuse the
+    # study when it differs -- naming one field, which is how a real cohort
+    # split first announced itself.
+    for name in sorted({k for db in databases for k in db
+                        if k.startswith("data_") and not k.startswith("data_file_")}):
+        if len({json.dumps(db.get(name), sort_keys=True) for db in databases}) > 1:
+            sys.exit("ValueError: Inconsistency detected in eddy input data in %s!" % name)
+
     if grouping is not None:
         with open(grouping) as fh:
             lines = [line.strip() for line in fh if line.strip()]

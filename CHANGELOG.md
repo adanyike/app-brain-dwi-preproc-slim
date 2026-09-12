@@ -13,6 +13,15 @@
   existing `qc/` bundle is untouched; the new one exists because a group task
   stages every subject it is given, and staging hundreds of mean-b0 volumes to
   read a 2 KB database is not worth doing.
+- The signature compares the eddy **input** data as well as the output flags,
+  exactly. Newer FSL releases check the acquisition too -- `Inconsistency
+  detected in eddy input data in topup acquisition parameters!` is what a real
+  study hit -- so a key looser than that comparison pools subjects SQUAD then
+  rejects, failing the whole study instead of splitting one cohort. Rounding is
+  gone with it: b-values of 1495 and 1500 are different cohorts, because they
+  are different to SQUAD. `signature_fields` narrows the comparison where an FSL
+  tolerates a difference, and a refusal this app did not predict is followed by
+  a field-by-field comparison of the staged subjects rather than a traceback.
 - The signature is what makes a group run predictable. `eddy_squad` pools
   subjects only when `eddy` ran with the same features for all of them, and
   raises `Eddy output inconsistency detected!` otherwise — which on brainlife is

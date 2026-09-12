@@ -150,13 +150,26 @@ an independently launched task, so that is easy to trip:
 * **`eddy_repol`, `eddy_cnr_maps`, `eddy_residuals` changed between submissions**
   → no outlier, CNR or residual metrics.
 
+Newer FSL releases compare the eddy **input** data as well, and refuse the study
+with `Inconsistency detected in eddy input data in <field>!` when subjects
+disagree on the acquisition — the topup acquisition parameters, the shell
+b-values, the voxel size, the volume counts.
+
 So each subject publishes a **cohort signature** (`eddyqc/squad_ready.json`, also
-shown on the task page): those six flags, plus the shell count and b-values,
-which must match for the group's per-shell arrays to line up. The group App
-buckets its inputs by signature, reports on the largest cohort, and names the
-subjects it left out and the reason — rather than failing on subject 37. Run it
-again with `cohort` set to another signature to report on that one too, or set
-`require_homogeneous` to refuse the split instead of choosing.
+shown on the task page): those six flags plus every acquisition field SQUAD
+compares, taken **exactly** as QUAD wrote them. The comparison is exact because
+SQUAD's is: a b-value of 1495 against 1500 is a different cohort, since pooling
+them would fail the whole study rather than split it. The group App buckets its
+inputs by signature, reports on the largest cohort, and names the subjects it
+left out and the field that differs, with both values — rather than failing on
+subject 37. Run it again with `cohort` set to another signature to report on that
+one too, or set `require_homogeneous` to refuse the split instead of choosing.
+
+If your FSL turns out to tolerate a difference, narrow what the key compares with
+`signature_fields` (a list of `data_*` field names) and those subjects pool again.
+And if a group run is refused anyway — a future release comparing something this
+app does not — the failure is followed by a comparison of every eddy input field
+across the staged subjects, naming the field and which subjects hold which value.
 
 Setting `require_gpu: true` across a project is the way to stop the cohort
 splitting in the first place.
@@ -187,6 +200,7 @@ python3 python/eddyqc_summary.py --qc-json <task>/output/qc/eddy_quad/qc.json \
 | `cohort` | largest | The signature (or its short hash) of the cohort to report on |
 | `require_homogeneous` | `false` | Fail when the inputs split into more than one cohort, instead of choosing the largest |
 | `min_subjects` | `2` | Refuse to call a smaller group a study |
+| `signature_fields` | every `data_*` field | Which acquisition fields decide cohort membership. Narrow it when your FSL tolerates a difference |
 | `subject_labels` | from the data | Comma-separated labels overriding the ones taken from `squad_ready.json` / `_inputs` |
 
 The grouping variable is matched by name wherever it can be: `eddy_squad` itself

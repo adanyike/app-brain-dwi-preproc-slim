@@ -44,8 +44,12 @@ from typing import Any, Dict, List, Sequence, Tuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from eddyqc_summary import (  # noqa: E402  (path set above)
+    ACQUISITION_FIELDS,
+    FIELD_MEANING,
     SQUAD_FLAGS,
     FLAG_MEANING,
+    acquisition_of,
+    canonical,
     flags_of,
     metrics_of,
     protocol_of,
@@ -218,8 +222,26 @@ def unique_labels(labels: Sequence[str]) -> List[str]:
 
 # --------------------------------------------------------------- subjects ----
 
+def signature_fields(config: dict) -> List[str]:
+    """Which acquisition fields the cohort key compares.
+
+    Every one of them by default, because that is at least as strict as the
+    comparison SQUAD makes, and a key looser than that fails the whole study
+    rather than one cohort. Narrowing it is a deliberate choice: if your FSL
+    tolerates a difference -- a subject with one dropped volume, say -- drop the
+    field here and those subjects pool again.
+    """
+    requested = config.get("signature_fields")
+    if requested in (None, "", []):
+        return list(ACQUISITION_FIELDS)
+    if isinstance(requested, str):
+        requested = [name.strip() for name in requested.replace(",", " ").split()]
+    return [name for name in requested if name]
+
+
 def collect(config: dict, overrides: Sequence[str]) -> Tuple[List[dict], List[dict]]:
     """(usable subjects, unusable inputs) -- each as a plain dict for the report."""
+    fields = signature_fields(config)
     paths = expand_list_file(config_paths(config))
     if not paths:
         raise StagingError(
@@ -248,15 +270,17 @@ def collect(config: dict, overrides: Sequence[str]) -> Tuple[List[dict], List[di
         subject, session = label_for(index, path, qc_json, summary, metas, overrides)
         flags = flags_of(qc)
         protocol = protocol_of(qc)
+        acquisition = acquisition_of(qc, fields)
         raw_labels.append(sanitise(subject if not session else "%s_%s" % (subject, session)))
         subjects.append({
             "input": path,
             "qc_json": qc_json,
             "subject": subject,
             "session": session,
-            "signature": signature_of(flags, protocol),
+            "signature": signature_of(flags, acquisition),
             "eddy_flags": flags,
             "protocol": protocol,
+            "acquisition": acquisition,
             "metrics": metrics_of(qc),
         })
 
@@ -281,22 +305,30 @@ def bucket(subjects: Sequence[dict]) -> List[dict]:
     return cohorts
 
 
-def explain_difference(chosen: str, other: str) -> str:
-    """Why these two cohorts cannot be pooled, in the pipeline's own terms."""
-    def parse(signature: str) -> Dict[str, str]:
-        return dict(part.split("=", 1) for part in signature.split("|") if "=" in part)
+def abbreviate(value: Any, limit: int = 60) -> str:
+    """A value short enough for a message, without hiding what it is."""
+    text = canonical(value)
+    return text if len(text) <= limit else text[:limit - 1] + "…"
 
-    a, b = parse(chosen), parse(other)
+
+def explain_difference(chosen: dict, other: dict) -> str:
+    """Why these two cohorts cannot be pooled, naming the field and its values.
+
+    Compared from the values themselves rather than from the signature string:
+    a reader needs to see that one group has a readout of 0.0959 and the other
+    0.1043, not that two hashes differ.
+    """
     reasons = []
-    a_flags = set(filter(None, a.get("flags", "").split(",")))
-    b_flags = set(filter(None, b.get("flags", "").split(",")))
-    for flag in sorted(a_flags ^ b_flags):
-        meaning = FLAG_MEANING.get("qc_%s_flag" % flag, flag)
-        reasons.append("%s %s" % (meaning, "missing here" if flag in a_flags else "present here"))
-    for key, label in (("shells", "number of shells"), ("bvals", "shell b-values"),
-                       ("pedirs", "phase-encode directions")):
-        if a.get(key) != b.get(key):
-            reasons.append("%s differs (%s vs %s)" % (label, a.get(key), b.get(key)))
+    for name in SQUAD_FLAGS:
+        here, there = bool(chosen["eddy_flags"].get(name)), bool(other["eddy_flags"].get(name))
+        if here != there:
+            reasons.append("%s %s" % (FLAG_MEANING[name],
+                                      "missing here" if there else "present here"))
+    for name, value in sorted(chosen["acquisition"].items()):
+        if canonical(value) != canonical(other["acquisition"].get(name)):
+            reasons.append("%s differs (%s vs %s)"
+                           % (FIELD_MEANING.get(name, name), abbreviate(value),
+                              abbreviate(other["acquisition"].get(name))))
     return "; ".join(reasons) or "signature differs"
 
 
@@ -445,13 +477,70 @@ def stage(cohort: dict, work_dir: str) -> Tuple[str, List[str]]:
     return list_file, missing_reports
 
 
+def diagnose(list_file: str) -> int:
+    """Say which fields differ across an already-staged cohort, and how.
+
+    For when eddy_squad refuses a cohort anyway: a future FSL may compare a
+    field this app does not know to compare, and "Inconsistency detected in eddy
+    input data in <something>!" is not enough to act on. Comparing every field
+    ourselves turns it into the subject list and the two values.
+    """
+    with open(list_file) as fh:
+        folders = [line.strip() for line in fh if line.strip()]
+
+    databases = [(os.path.basename(folder), read_json(os.path.join(folder, "qc.json")))
+                 for folder in folders]
+    databases = [(label, qc) for label, qc in databases if qc]
+    if len(databases) < 2:
+        print("squad_inputs: fewer than two databases to compare", file=sys.stderr)
+        return 1
+
+    # Every field QUAD writes that describes the data rather than this subject's
+    # own files -- a superset of what any version of SQUAD compares.
+    names = sorted({name for _, qc in databases for name in qc
+                    if name.startswith("data_") and not name.startswith("data_file_")})
+    differing = 0
+    for name in names:
+        values: Dict[str, List[str]] = {}
+        for label, qc in databases:
+            values.setdefault(canonical(qc.get(name)), []).append(label)
+        if len(values) < 2:
+            continue
+        differing += 1
+        print("%s (%s) differs across subjects:"
+              % (name, FIELD_MEANING.get(name, "no description")), file=sys.stderr)
+        for value, labels in sorted(values.items(), key=lambda kv: -len(kv[1])):
+            print("    %-3d subject(s): %s   [%s]"
+                  % (len(labels), abbreviate(json.loads(value), 80),
+                     ", ".join(labels[:6]) + ("…" if len(labels) > 6 else "")),
+                  file=sys.stderr)
+
+    if not differing:
+        print("squad_inputs: every eddy input field matches across these subjects; "
+              "the refusal is about something this app does not compare",
+              file=sys.stderr)
+    else:
+        print("squad_inputs: add the field(s) above to 'signature_fields' in "
+              "config.json to split these subjects into cohorts instead",
+              file=sys.stderr)
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--config", required=True, help="the task's config.json")
-    ap.add_argument("--work-dir", required=True, help="where to stage the cohort")
-    ap.add_argument("--out", required=True, help="cohorts.json to write")
+    ap.add_argument("--config", help="the task's config.json")
+    ap.add_argument("--work-dir", help="where to stage the cohort")
+    ap.add_argument("--out", help="cohorts.json to write")
     ap.add_argument("--min-subjects", type=int, default=2)
+    ap.add_argument("--diagnose", metavar="LIST_FILE",
+                    help="compare a staged cohort's eddy input fields and exit")
     args = ap.parse_args(argv)
+
+    if args.diagnose:
+        return diagnose(args.diagnose)
+    for required in ("config", "work_dir", "out"):
+        if not getattr(args, required):
+            ap.error("--%s is required" % required.replace("_", "-"))
 
     config = read_json(args.config)
     if not config:
@@ -520,7 +609,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "excluded": [
                 {"signature": c["signature"], "signature_hash": c["signature_hash"],
                  "subjects": c["subjects"],
-                 "reason": explain_difference(chosen["signature"], c["signature"])}
+                 "reason": explain_difference(chosen["members"][0], c["members"][0])}
                 for c in cohorts if c["signature"] != chosen["signature"]],
             "subjects": [{k: m[k] for k in ("label", "subject", "session", "signature",
                                             "metrics", "input")}
