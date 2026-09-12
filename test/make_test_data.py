@@ -110,6 +110,38 @@ def slice_timing(n_slices, multiband, tr=4.0):
     return times
 
 
+def write_atlas(directory, n_labels, shape=(16, 16, 12), voxel=2.0):
+    """A stand-in FA template and label image for the atlas registration stage.
+
+    The real ones ship with FSL; these exist so the dry run can exercise stages
+    4 and 5 without a neuroimaging toolchain.  Labels are scattered across the
+    grid so that every one of them survives resampling into the subject's space
+    and no ROI comes out empty by construction.
+    """
+    os.makedirs(directory, exist_ok=True)
+    affine = np.diag([voxel, voxel, voxel, 1.0])
+
+    template = brain_phantom(shape)
+    template = (template / max(template.max(), 1e-6)).astype(np.float32)
+    nib.save(nib.Nifti1Image(template, affine),
+             os.path.join(directory, "template_fa.nii.gz"))
+
+    labels = (np.arange(int(np.prod(shape))) % n_labels + 1).astype(np.int16)
+    nib.save(nib.Nifti1Image(labels.reshape(shape), affine),
+             os.path.join(directory, "atlas_labels.nii.gz"))
+
+
+def shipped_label_count(default=50):
+    """How many ROIs templates/JHU-ICBM-labels.json describes."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "..", "templates", "JHU-ICBM-labels.json")
+    try:
+        with open(path) as fh:
+            return len(json.load(fh)["labels"])
+    except (OSError, ValueError, KeyError):
+        return default
+
+
 def write_series(directory, name, data, bvals, bvecs, sidecar, voxel=2.0):
     os.makedirs(directory, exist_ok=True)
     affine = np.diag([voxel, voxel, voxel, 1.0])
@@ -161,6 +193,8 @@ def main():
                  synth_series(shape, rev_bvals, rev_bvecs, base),
                  rev_bvals, rev_bvecs,
                  dict(common, PhaseEncodingDirection="j"))
+
+    write_atlas(os.path.join(args.outdir, "atlas"), shipped_label_count())
 
     print("wrote %d forward and %d reverse volumes of %dx%dx%d to %s"
           % (len(fwd_bvals), len(rev_bvals), *shape, args.outdir))

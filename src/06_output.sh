@@ -14,6 +14,7 @@ timer_start
 
 # Stages 4 and 5 are optional (atlas_registration=false) and QC can be turned
 # off, so default every variable they would have set.
+TOPUP_CONFIG="${TOPUP_CONFIG:-}"
 ATLAS_NATIVE="${ATLAS_NATIVE:-}"
 ATLAS_LABELS="${ATLAS_LABELS:-}"
 REG_PREFIX="${REG_PREFIX:-}"
@@ -106,6 +107,7 @@ python3 "$APP_DIR/python/make_product.py" \
     --eddy-binary "$EDDY_BIN" \
     --slice-to-volume "$EDDY_S2V" \
     --topup-applied "$TOPUP_APPLIED" \
+    --topup-config "${TOPUP_CONFIG:-}" \
     --shell "$DTIFIT_SHELL" \
     --out "$PWD/product.json"
 

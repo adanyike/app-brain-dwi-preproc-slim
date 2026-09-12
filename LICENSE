@@ -22,11 +22,11 @@ SOFTWARE.
 
 ---
 
-Bundled data
+Atlas data
 
-templates/JHU-ICBM-FA-1mm.nii.gz and templates/JHU-ICBM-labels-1mm.nii.gz are
-the JHU ICBM-DTI-81 white-matter FA template and label atlas, distributed with
-FSL under the FSL licence for non-commercial research use.
+The app registers to the JHU ICBM-DTI-81 white-matter FA template and warps its
+label atlas. Both are distributed with FSL under the FSL licence for
+non-commercial research use.
 
   Mori S, Wakana S, van Zijl PCM, Nagae-Poetscher LM.
   MRI Atlas of Human White Matter. Elsevier, Amsterdam, 2005.

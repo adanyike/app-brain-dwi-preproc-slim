@@ -55,29 +55,13 @@ fslmerge -t "$MERGED" "$DWI" "$RDWI"
 NVOL_TOTAL=$(( NVOL_FWD + NVOL_REV ))
 log "merged series: $NVOL_TOTAL volumes"
 
-# --------------------------------------------------- odd slice handling ----
-# topup's default subsampling schedule halves the matrix, so an odd slice count
-# makes it fail.  The original pipeline cropped one slice off and told eddy
-# about the resulting slice-order shift via --mb/--mb_offs.
-DROP_ODD_SLICE="$(cfg_bool remove_odd_slice true)"
-REMOVE_BOTTOM="$(cfg_bool remove_bottom_slice true)"
-SLICE_DROPPED=none
-
-if [ $(( NSLICE % 2 )) -ne 0 ] && is_true "$DROP_ODD_SLICE"; then
-    CROPPED="$RAW/dwi_merged_cropped.nii.gz"
-    if is_true "$REMOVE_BOTTOM"; then
-        log "odd slice count ($NSLICE) -- dropping the bottom slice"
-        fslroi "$MERGED" "$CROPPED" 0 -1 0 -1 1 -1 0 -1
-        SLICE_DROPPED=bottom
-    else
-        log "odd slice count ($NSLICE) -- dropping the top slice"
-        fslroi "$MERGED" "$CROPPED" 0 -1 0 -1 0 $(( NSLICE - 1 )) 0 -1
-        SLICE_DROPPED=top
-    fi
-    mv "$CROPPED" "$MERGED"
-elif [ $(( NSLICE % 2 )) -ne 0 ]; then
-    warn "slice count is odd ($NSLICE) and remove_odd_slice is false -- topup may fail unless topup_config handles it"
-fi
+# Every slice is kept, whatever the slice count.  topup only requires the matrix
+# to be a multiple of the sub-sampling level in its config, and stage 1 defaults
+# to b02b0_1.cnf, which does not sub-sample -- so an odd slice count needs no
+# cropping.  FSL withdrew the crop-or-duplicate-a-slice advice for exactly this
+# reason: eddy's slice-to-volume correction needs the true multiband structure,
+# and a cropped volume no longer has it.
+# https://fsl.fmrib.ox.ac.uk/fsl/docs/diffusion/topup/users_guide/index.html
 
 # ------------------------------------- acqparams / index / gradient table ----
 PREP_ARGS=(
@@ -115,33 +99,87 @@ if [ -n "$USER_INDEX" ]; then
     cp "$USER_INDEX" "$PREP/index.txt"
 fi
 
-# ----------------------------------------------------------- slspec / mb ----
+# -------------------------------------------------------------- slspec ----
 USER_SLSPEC="$(cfg_path slspec)"
+SLICE_ORDER="$(cfg_manual slice_order)"
 SLSPEC=""
 MB_FACTOR=""
 
 if [ -n "$USER_SLSPEC" ]; then
     log "using the supplied slspec file"
+    # A supplied slspec is taken entirely on trust, and the easy mistake is to
+    # reuse one from a different protocol -- eddy would then model the slice
+    # timing of an acquisition this is not.  A derived slspec is checked against
+    # the slice count (make_slspec.py --n-slices); check a supplied one too.
+    SLSPEC_PROBLEM="$(awk -v n="$NSLICE" '
+        NF == 0 { next }
+        width == 0 { width = NF }
+        {
+            if (NF != width) {
+                printf "row %d lists %d slice(s) but the first row lists %d\n", NR, NF, width
+                bad = 1; exit 1
+            }
+            for (i = 1; i <= NF; i++) {
+                if ($i !~ /^[0-9]+$/) { printf "entry %s is not a 0-based slice index\n", $i; bad = 1; exit 1 }
+                if ($i + 0 >= n)      { printf "slice %s is outside 0..%d\n", $i, n - 1; bad = 1; exit 1 }
+                if (seen[$i + 0]++)   { printf "slice %s appears more than once\n", $i; bad = 1; exit 1 }
+                total++
+            }
+        }
+        END {
+            if (bad) exit 1
+            if (total != n) { printf "covers %d slice(s) but the data has %d\n", total, n; exit 1 }
+        }' "$USER_SLSPEC")" || \
+        die "the supplied slspec does not describe this acquisition ($NSLICE slices): $SLSPEC_PROBLEM"
     cp "$USER_SLSPEC" "$PREP/slspec.txt"
     SLSPEC="$PREP/slspec.txt"
     MB_FACTOR="$(awk 'NF{print NF; exit}' "$SLSPEC")"
+    log "multiband factor $MB_FACTOR ($(grep -c '[^[:space:]]' "$SLSPEC") excitations)"
+elif [ -n "$SLICE_ORDER" ]; then
+    # The escape hatch for exports that carry no slice timing at all -- some
+    # Philips data.  This is a declaration about the acquisition, not a
+    # measurement of it, so it only runs when asked for explicitly.
+    GEN_ARGS=(--slice-order "$SLICE_ORDER" --n-slices "$NSLICE"
+              --multiband "$(cfg multiband 1)" --packages "$(cfg slice_packages 1)")
+    SLICE_STEP="$(cfg slice_step "")"
+    [ -n "$SLICE_STEP" ] && GEN_ARGS+=(--slice-step "$SLICE_STEP") || true
+
+    python3 "$APP_DIR/python/make_slspec.py" "${GEN_ARGS[@]}" \
+        --out "$PREP/slspec.txt" --mb-out "$PREP/mb.txt" \
+        || die "could not build a slspec from the declared slice order"
+    SLSPEC="$PREP/slspec.txt"
+    MB_FACTOR="$(cat "$PREP/mb.txt")"
+    log "multiband factor $MB_FACTOR from the declared slice order '$SLICE_ORDER'"
+
+    # Where the sidecar does carry timings, they are the measurement and the
+    # declaration is only a claim about it.  Disagreement means one of the two
+    # is wrong about this acquisition, and running either way would model the
+    # wrong slice timing, so stop and say so.
+    if [ -n "$DWI_JSON" ] && python3 "$APP_DIR/python/make_slspec.py" \
+            --json "$DWI_JSON" --out "$PREP/slspec_from_sidecar.txt" \
+            --n-slices "$NSLICE" >/dev/null 2>&1; then
+        if cmp -s "$PREP/slspec.txt" "$PREP/slspec_from_sidecar.txt"; then
+            log "the declared slice order agrees with the sidecar's SliceTiming"
+        else
+            die "slice_order '$SLICE_ORDER' does not match the SliceTiming in $DWI_JSON.
+    declared: $(tr -s ' ' < "$PREP/slspec.txt" | head -1 | sed 's/^ *//')...
+    sidecar:  $(tr -s ' ' < "$PREP/slspec_from_sidecar.txt" | head -1 | sed 's/^ *//')...
+    The sidecar is a measurement and the declaration is not, so drop
+    'slice_order' to use the sidecar, correct it to match the protocol, or
+    supply a slspec file directly via the 'slspec' input."
+        fi
+    fi
 elif [ -n "$DWI_JSON" ]; then
     if python3 "$APP_DIR/python/make_slspec.py" --json "$DWI_JSON" \
             --out "$PREP/slspec.txt" --mb-out "$PREP/mb.txt" --n-slices "$NSLICE"; then
         SLSPEC="$PREP/slspec.txt"
         MB_FACTOR="$(cat "$PREP/mb.txt")"
+        log "multiband factor $MB_FACTOR derived from the slice timings"
     else
         warn "could not derive a slspec from $DWI_JSON -- slice-to-volume correction will be disabled"
     fi
 else
     warn "no dwi_json supplied -- slice-to-volume correction will be disabled"
-fi
-
-# A cropped volume no longer matches the slspec rows (one row would be short),
-# so fall back to eddy's --mb/--mb_offs description of the same slice order.
-if [ "$SLICE_DROPPED" != none ] && [ -n "$MB_FACTOR" ]; then
-    log "a slice was cropped -- describing the slice order with --mb $MB_FACTOR instead of --slspec"
-    SLSPEC=""
 fi
 
 # --------------------------------------------------- denoise and degibbs ----
@@ -174,12 +212,10 @@ INDEX_FILE="$PREP/index.txt"
 MERGED_BVALS="$PREP/merged.bvals"
 MERGED_BVECS="$PREP/merged.bvecs"
 SLSPEC="$SLSPEC"
-MB_FACTOR="$MB_FACTOR"
-SLICE_DROPPED="$SLICE_DROPPED"
 NVOL_TOTAL=$NVOL_TOTAL
 NVOL_FWD=$NVOL_FWD
 NVOL_REV=$NVOL_REV
-NSLICE_ORIGINAL=$NSLICE
+NSLICE=$NSLICE
 HAS_REVERSE_PE=$([ -n "$RDWI" ] && echo true || echo false)
 EOSTATE
 

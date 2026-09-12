@@ -33,7 +33,7 @@ run "package.json is valid JSON" jq empty package.json
 run "atlas label metadata is valid JSON" jq empty templates/JHU-ICBM-labels.json
 run "entrypoints are executable" bash -c '[ -x main ] && [ -x run.sh ]'
 run "templates are present" bash -c '
-    for f in JHU-ICBM-FA-1mm.nii.gz JHU-ICBM-labels-1mm.nii.gz JHU-ICBM-labels.json; do
+    for f in JHU-ICBM-FA-1mm.nii.gz JHU-ICBM-labels.json philips_84_slices_slspec.txt; do
         [ -s "templates/$f" ] || { echo "missing templates/$f"; exit 1; }
     done'
 
@@ -60,6 +60,7 @@ run "make_slspec"     python3 test/test_make_slspec.py -q
 run "prepare_inputs"  python3 test/test_prepare_inputs.py -q
 run "shells"          python3 test/test_shells.py -q
 run "labels"          python3 test/test_labels.py -q
+run "rotated_bvecs"   python3 test/test_rotated_bvecs.py -q
 run "make_product"    python3 test/test_make_product.py -q
 if python3 -c 'import numpy, nibabel' 2>/dev/null; then
     run "roi_stats"   python3 test/test_roi_stats.py -q

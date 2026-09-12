@@ -1,10 +1,10 @@
 #!/bin/bash
 # Stage 3 -- B1 bias correction, final brain mask, tensor fit and derived maps.
 #
-# Following the original pipeline the tensor is fitted on a single shell (b=1500
-# by default) together with the b=0 volumes, because dtifit's monoexponential
-# model is not valid across a multi-shell acquisition.  Set dtifit_shell to
-# "all" to fit every volume anyway.
+# The tensor is fitted on a single diffusion-weighted shell together with the
+# b=0 volumes, because dtifit's monoexponential model is not valid across a
+# multi-shell acquisition.  Set dtifit_shell to "all" to fit every volume
+# anyway.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 source "$WORK_DIR/state.sh"
@@ -35,8 +35,8 @@ fslmaths "$PROC/b0.nii.gz" -Tmean "$PROC/meanb0.nii.gz"
 
 BET_F="$(cfg bet_final_f 0.3)"
 bet "$PROC/meanb0.nii.gz" "$PROC/brain" -m -n -f "$BET_F"
-# Fill interior holes -- the original intended this but the fill command landed
-# in the wrong command buffer, so it never ran.
+# Fill interior holes left by bet, which otherwise punch through every ROI
+# that overlaps them.
 fslmaths "$PROC/brain_mask.nii.gz" -fillh "$PROC/brain_mask_filled.nii.gz"
 mv "$PROC/brain_mask_filled.nii.gz" "$PROC/brain_mask.nii.gz"
 FINAL_MASK="$PROC/brain_mask.nii.gz"
