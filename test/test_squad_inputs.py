@@ -285,6 +285,26 @@ class TestCohorts(StagingCase):
         report = self.run_staging(self.config(folders))
         self.assertIn("number of shells differs", report["excluded"][0]["reason"])
 
+    def test_a_cohort_of_one_is_refused_with_the_reason(self):
+        # Two subjects that cannot be pooled with each other pass the
+        # usable-inputs check and would otherwise produce a "group" of one.
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(data_no_dw_vols=98, data_no_shells=1,
+                                        data_unique_bvals=[1000]),
+                                summary={"subject": "b"})]
+        report = self.run_staging(self.config(folders), expect=1)
+        self.assertIn("largest cohort has 1 subject", report["error"])
+        self.assertIn("2 cohort(s) present", report["error"])
+        self.assertIn("shell b-values", report["error"])
+        # The split itself is still reported, so the task page can show it.
+        self.assertEqual(len(report["cohorts"]), 2)
+
+    def test_min_subjects_one_lets_a_single_subject_cohort_through(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(data_no_shells=1), summary={"subject": "b"})]
+        report = self.run_staging(self.config(folders), min_subjects=1)
+        self.assertEqual(report["chosen"]["n_subjects"], 1)
+
     def test_a_named_cohort_can_be_selected(self):
         report = self.run_staging(self.config(self.heterogeneous()))
         minority = next(c for c in report["cohorts"] if c["n_subjects"] == 2)

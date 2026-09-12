@@ -577,6 +577,31 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         chosen = choose(cohorts, str(config.get("cohort") or "").strip(),
                         bool(config.get("require_homogeneous")))
+
+        # The count that matters is the cohort's, not the input list's. Subjects
+        # that each land in a cohort of their own pass the check above and would
+        # then hand eddy_squad a single folder -- a "study-wise" report of one
+        # subject, which looks like a result and is not one.
+        if chosen["n_subjects"] < args.min_subjects:
+            report["cohorts"] = [{k: c[k] for k in ("signature", "signature_hash",
+                                                    "n_subjects", "subjects")}
+                                 for c in cohorts]
+            raise StagingError(
+                "the largest cohort has %d subject(s) and a group report needs "
+                "at least %d: these subjects cannot be pooled with each other. "
+                "%d cohort(s) present -- %s. They differ in: %s. Process the "
+                "subjects you want to compare the same way, or set "
+                "signature_fields to ignore a difference your FSL tolerates; "
+                "min_subjects lets a smaller group through if you really want "
+                "one."
+                % (chosen["n_subjects"], args.min_subjects, len(cohorts),
+                   "; ".join("%s (%s)" % (c["signature_hash"], ", ".join(c["subjects"]))
+                             for c in cohorts),
+                   explain_difference(chosen["members"][0],
+                                      next(c["members"][0] for c in cohorts
+                                           if c["signature"] != chosen["signature"]))
+                   if len(cohorts) > 1 else "nothing -- there is only one cohort"))
+
         list_file, missing_reports = stage(chosen, args.work_dir)
         report["missing_reports"] = missing_reports
 
