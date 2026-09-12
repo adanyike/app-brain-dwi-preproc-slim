@@ -60,7 +60,22 @@ INPUT_KEYS = ("eddyqc", "qc_folders", "qc_json", "quad_folders")
 
 # Where a qc.json hides inside a staged dataset, relative to what the config
 # pointed at. "" means the path itself is the folder holding qc.json.
-QC_SUBDIRS = ("", "eddyqc", "qc", "qc/eddy_quad", ".qc")
+#
+# More than one of these is the same app at different ages: `eddyqc` is the lean
+# dataset published for group analysis, `qc/eddy_quad` is the whole task output
+# directory of a run that predates it, `eddy_quad` is that run's archived qc
+# dataset (brainlife stages a dataset at what was inside output/qc/), and `.qc`
+# is eddy_quad's own default. A study processed before the group App existed
+# should not have to be reprocessed to take part in it.
+# The `output/…` pair is for a task directory named directly, which is what
+# someone with older runs on disk reaches for.
+QC_SUBDIRS = ("", "eddyqc", "qc", "qc/eddy_quad", "eddy_quad", ".qc",
+              "output/eddyqc", "output/qc/eddy_quad")
+
+# Directory names that say nothing about who a subject is, so a label taken from
+# the path skips past them.
+GENERIC_DIRS = {"", ".", "..", "eddyqc", "qc", "eddy_quad", ".qc",
+                "output", "outputs", "work", "subjects"}
 
 
 class StagingError(Exception):
@@ -175,10 +190,19 @@ def label_for(index: int, path: str, qc_json: str, summary: dict,
     meta = meta_for(index, path, metas)
     if meta.get("subject"):
         return meta["subject"], meta.get("session", "")
-    folder = os.path.dirname(qc_json) or path
-    for candidate in (os.path.basename(folder), os.path.basename(os.path.dirname(folder))):
-        if candidate and candidate not in ("", ".", "..", "eddyqc", "qc", "eddy_quad", ".qc"):
+    # Nothing recorded the subject, so fall back to the path. Walk up past the
+    # directories that name a *kind* of output rather than a subject -- an older
+    # task's qc.json sits at <task>/output/qc/eddy_quad/qc.json, four levels of
+    # them -- and take the first name that could be an identifier.
+    folder = os.path.abspath(os.path.dirname(qc_json) or path)
+    for _ in range(5):
+        candidate = os.path.basename(folder)
+        if candidate.lower() not in GENERIC_DIRS:
             return candidate, ""
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            break
+        folder = parent
     return "sub-%02d" % (index + 1), ""
 
 

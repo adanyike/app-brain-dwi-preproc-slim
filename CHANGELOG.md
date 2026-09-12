@@ -36,6 +36,11 @@
   are checked first and the update alone is skipped when either is absent.
 - `product.json` for a group task reports the cohort, the exclusions and the
   per-subject motion, outlier and SNR distributions, worst subject first.
+- Subjects processed before any of this existed need no reprocessing: a QUAD
+  folder is found under `eddyqc/`, an archived `qc` dataset, an older task's
+  `output/qc/eddy_quad/`, or eddy_quad's own `.qc/`, and a subject label is
+  taken from the first directory in the path that names something other than a
+  kind of output.
 - Subject and session labels are now settled once, in stage 0, and carried in
   `state.sh`; stage 6 needs them for the QC dataset and stage 5 no longer
   resolves them separately.

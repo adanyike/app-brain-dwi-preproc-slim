@@ -161,11 +161,26 @@ again with `cohort` set to another signature to report on that one too, or set
 Setting `require_gpu: true` across a project is the way to stop the cohort
 splitting in the first place.
 
+### Subjects processed before this App existed
+
+Nothing needs reprocessing. `eddy_quad` has always published `qc.json`, and that
+is all `eddy_squad` reads — so an older task's `output/qc/eddy_quad/` is a valid
+input, and old and new subjects pool together as long as `eddy` ran with the
+same features. Two things differ: those datasets carry no `squad_ready.json`, so
+subject labels come from brainlife's input metadata or the directory name (use
+`subject_labels` if neither is right), and to see one subject's signature
+without a group run, summarise its database directly:
+
+```bash
+python3 python/eddyqc_summary.py --qc-json <task>/output/qc/eddy_quad/qc.json \
+    --subject sub-01 --out squad_ready.json
+```
+
 ### Group configuration
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `eddyqc` | — | The per-subject eddy QC datasets. A path to a `qc.json`, to the folder holding it, or a list of either |
+| `eddyqc` | — | The per-subject eddy QC datasets. A path to a `qc.json`, to any folder holding one (`eddyqc/`, an archived `qc` dataset, or an older task's `output/qc/eddy_quad/`), or a list of either |
 | `grouping_variable` | — | A `participants.tsv`-style table with a subject column and one value column, matched **by subject name**; or a file already in `eddy_squad`'s own format, matched by position |
 | `variable_name` / `variable_is_continuous` | column name / `false` | Label for the variable, and whether to draw scatter plots with a regression fit (continuous) or violin plots per class (categorical) |
 | `update_single_subject_reports` | `false` | Also rewrite each subject's own report with study-wise context |

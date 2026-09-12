@@ -97,6 +97,26 @@ class TestInputResolution(StagingCase):
         report = self.run_staging(self.config(folders))
         self.assertEqual(report["chosen"]["n_subjects"], 2)
 
+    def test_an_archived_qc_dataset_is_accepted(self):
+        # brainlife stages a dataset at what was *inside* output/qc/, so an
+        # archived qc dataset from an older run presents as <dataset>/eddy_quad.
+        folders = []
+        for name in ("a", "b"):
+            inner = self.dataset(os.path.join(name, "eddy_quad"), qc())
+            folders.append(os.path.dirname(inner))
+        report = self.run_staging(self.config(folders))
+        self.assertEqual(report["chosen"]["n_subjects"], 2)
+
+    def test_a_label_is_found_past_the_generic_directories(self):
+        # An older task's database sits at <task>/output/qc/eddy_quad/qc.json,
+        # and none of those three directories names the subject.
+        folders = []
+        for name in ("sub-legacy-1", "sub-legacy-2"):
+            inner = self.dataset(os.path.join(name, "output", "qc", "eddy_quad"), qc())
+            folders.append(os.path.dirname(os.path.dirname(os.path.dirname(inner))))
+        report = self.run_staging(self.config(folders))
+        self.assertEqual(report["chosen"]["subjects"], ["sub-legacy-1", "sub-legacy-2"])
+
     def test_a_single_input_is_still_an_array_on_brainlife(self):
         # brainlife puts even a single selected dataset in an array, and a
         # one-subject group report is refused as meaningless.
