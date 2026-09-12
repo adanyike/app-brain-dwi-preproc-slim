@@ -141,6 +141,18 @@ ENV PATH="${FSLDIR}/share/fsl/bin:${FSLDIR}/bin:${ANTSPATH}:${MRTRIX_DIR}/bin:${
 RUN pip3 install --no-cache-dir --break-system-packages "numpy>=1.24" "nibabel>=5.1" \
     || pip3 install --no-cache-dir "numpy>=1.24" "nibabel>=5.1"
 
+# eddy_squad's update step merges the study-wise pages into each subject's own
+# report with PyPDF2, and FSL does not ship it. It goes into FSL's own
+# interpreter, not the system one, because that is what eddy_squad runs under.
+# Pinned below 3.0: the code uses PdfFileMerger / PdfFileReader / PdfFileWriter,
+# which 3.0 removed.
+#
+# Not fatal. Everything except `update_single_subject_reports` works without it,
+# and an image built on a network that cannot reach PyPDF2 should still be a
+# usable image -- run_squad.sh checks at run time and skips just that step.
+RUN ${FSLDIR}/bin/python -m pip install --no-cache-dir "PyPDF2<3" \
+    || echo "WARNING: PyPDF2 is not installed; eddy_squad cannot update single-subject reports" >&2
+
 # MRtrix3's python drivers (dwibiascorrect and friends) start with
 # `#!/usr/bin/env python`, and Ubuntu 22.04 provides no `python` at all -- only
 # python3.  In this image they resolve to FSL's bundled conda interpreter,

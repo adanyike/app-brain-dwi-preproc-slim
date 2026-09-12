@@ -41,8 +41,12 @@
   first, since brainlife stages inputs read-only and `eddy_squad -u` writes into
   the folders it is given, and the rewritten reports are collected under each
   subject's label. It needs two things the group report does not -- every
-  subject's own `qc.pdf`, and `PyPDF2` in FSL's python to merge with -- so both
-  are checked first and the update alone is skipped when either is absent.
+  subject's own `qc.pdf`, and a PDF library in FSL's python to merge with -- so
+  both are checked first and the update alone is skipped when either is absent.
+  The dependency is checked by importing `eddy_qc.SQUAD.squad_update` itself
+  rather than by guessing the library's name, which has changed between
+  releases, and the Dockerfile installs `PyPDF2<3` into FSL's interpreter (not
+  the system one, which is not what eddy_squad runs under).
 - `product.json` for a group task reports the cohort, the exclusions and the
   per-subject motion, outlier and SNR distributions, worst subject first.
 - Subjects processed before any of this existed need no reprocessing: a QUAD

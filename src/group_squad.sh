@@ -65,18 +65,26 @@ if is_true "$UPDATE_REPORTS"; then
     # take the whole group run down. The group report is the deliverable; skip
     # the update rather than lose it.
     MISSING="$(jq -r '(.missing_reports // []) | join(", ")' "$COHORTS")"
-    # Only the update step merges PDFs, and only it imports PyPDF2 -- which is
-    # neither a dependency of the group report nor of eddy_quad, so an image can
-    # produce every other output and still have no way to rewrite a subject
-    # report. Check it here rather than let the merge fail after the group run.
+    # Only the update step merges PDFs, and its dependencies are neither the
+    # group report's nor eddy_quad's -- so an image can produce every other
+    # output and still have no way to rewrite a subject report. Import the
+    # module that does the work rather than guessing at its dependency by name:
+    # which PDF library that is has changed between releases, and what matters
+    # is whether this installation can load it.
     FSL_PYTHON="${FSLDIR:-/opt/fsl}/bin/python"
-    NO_PYPDF=""
-    [ -x "$FSL_PYTHON" ] && ! "$FSL_PYTHON" -c 'import PyPDF2' >/dev/null 2>&1 && NO_PYPDF=1
+    UPDATE_IMPORT_ERROR=""
+    # The probe is *expected* to fail, so it cannot be left to propagate: this
+    # script runs under `set -e` with pipefail, where a failing command
+    # substitution ends the run.
+    if [ -x "$FSL_PYTHON" ]; then
+        UPDATE_IMPORT_ERROR="$({ "$FSL_PYTHON" -c \
+            'from eddy_qc.SQUAD import squad_update' 2>&1 >/dev/null || true; } | tail -1)"
+    fi
     if [ -n "$MISSING" ]; then
         warn "not updating the single-subject reports: no qc.pdf for $MISSING. Re-run those subjects with eddy_qc enabled, or unset update_single_subject_reports."
         UPDATE_REPORTS=false
-    elif [ -n "$NO_PYPDF" ]; then
-        warn "not updating the single-subject reports: FSL's python cannot import PyPDF2, which eddy_squad uses to merge the study-wise pages into each report. Install it into $FSL_PYTHON's environment, or unset update_single_subject_reports."
+    elif [ -n "$UPDATE_IMPORT_ERROR" ]; then
+        warn "not updating the single-subject reports: FSL's python cannot load eddy_squad's update step ($UPDATE_IMPORT_ERROR). Install what it names into $FSL_PYTHON's environment, or unset update_single_subject_reports. The group report is unaffected."
         UPDATE_REPORTS=false
     else
         SQUAD_ARGS+=(--update)

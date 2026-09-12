@@ -322,12 +322,16 @@ check "all four subjects are still in the group database" bash -c '
     [ "$(jq -r ".data_no_subjects" "'"$SCEN2"'/output/squad/group_db.json")" = "4" ]'
 
 # --- and neither does an FSL that cannot merge PDFs ---
-# Only the update step imports PyPDF2. Stand up an FSL python that satisfies
-# every other import and fails that one, which is exactly what a too-eager prune
-# leaves behind.
+# Only the update step needs a PDF library. Stand up an FSL python that
+# satisfies every other import and fails to load squad_update, which is what a
+# too-eager prune leaves behind.
 SCEN3="$ROOT/3d-no-pypdf2"
-mkdir -p "$SCEN3/fsl/bin" "$SCEN3/fakemods"
+mkdir -p "$SCEN3/fsl/bin" "$SCEN3/fakemods/eddy_qc/SQUAD"
 for module in seaborn pandas matplotlib; do : > "$SCEN3/fakemods/$module.py"; done
+: > "$SCEN3/fakemods/eddy_qc/__init__.py"
+: > "$SCEN3/fakemods/eddy_qc/SQUAD/__init__.py"
+# The real module's first unsatisfied import is its PDF library.
+printf 'from PyPDF2 import PdfFileMerger\n' > "$SCEN3/fakemods/eddy_qc/SQUAD/squad_update.py"
 cat > "$SCEN3/fsl/bin/python" <<EOSH
 #!/bin/sh
 PYTHONPATH="$SCEN3/fakemods:\${PYTHONPATH:-}" exec python3 "\$@"
