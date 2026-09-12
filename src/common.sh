@@ -134,7 +134,16 @@ cfg_manual() {
 cfg_path() {
     local value; value="$(cfg "$1" "")"
     [ -z "$value" ] && return 0
-    [ -e "$value" ] || die "input '$1' points at '$value', which does not exist"
+    # An absolute path that is missing is more often unmounted than mistyped:
+    # the app runs in a container that sees only the working directory, the app
+    # directory, and whatever EXTRA_BIND named. Say so, rather than sending
+    # someone to hunt for a typo in a path that is right.
+    if [ ! -e "$value" ]; then
+        case "$value" in
+            /*) die "input '$1' points at '$value', which this process cannot see. If it exists on the host, the container was not given it: pass EXTRA_BIND=$(dirname "$value") to ./main, and check that your container runtime shares that path (Docker Desktop needs it under Settings -> Resources -> File sharing; a symlink pointing outside the bound directory dangles inside the container)." ;;
+            *)  die "input '$1' points at '$value', which does not exist" ;;
+        esac
+    fi
     printf '%s' "$(cd "$(dirname "$value")" && pwd)/$(basename "$value")"
 }
 
