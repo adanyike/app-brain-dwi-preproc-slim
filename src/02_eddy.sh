@@ -54,8 +54,22 @@ EDDY_ARGS=(
 EDDY_NITER="$(cfg eddy_niter 6)"
 EDDY_ARGS+=(--niter="$EDDY_NITER")
 
+# The slice specification is what tells eddy which slices were excited
+# together.  Slice-to-volume correction needs it, but so does group-wise
+# outlier detection, which is on by default -- so pass it whenever it exists,
+# not only when --mporder is in play.
+[ -n "$SLSPEC" ] && EDDY_ARGS+=(--slspec="$SLSPEC") || true
+
 if is_true "$(cfg_bool eddy_repol true)"; then
-    EDDY_ARGS+=(--repol --ol_type="$(cfg eddy_ol_type both)")
+    OL_TYPE="$(cfg eddy_ol_type both)"
+    # 'both' and 'gw' detect outliers across multiband groups and eddy refuses
+    # them outright without a slice specification.  Degrade to slice-wise
+    # rather than handing it an invalid combination.
+    if [ -z "$SLSPEC" ] && [ "$OL_TYPE" != sw ]; then
+        warn "no slice specification available -- outlier detection falls back to --ol_type=sw ('$OL_TYPE' needs the multiband structure)"
+        OL_TYPE=sw
+    fi
+    EDDY_ARGS+=(--repol --ol_type="$OL_TYPE")
 fi
 
 EDDY_FWHM="$(cfg eddy_fwhm '10,6,0,0,0,0')"
@@ -67,15 +81,10 @@ if [ -n "$EDDY_FWHM" ]; then
 fi
 
 if is_true "$USE_S2V"; then
-    MPORDER="$(cfg eddy_mporder 6)"
     if [ -n "$SLSPEC" ]; then
-        # Always the measured slspec, never eddy's --mb shorthand: --mb assumes a
-        # uniform multiband pattern, while the slspec is the grouping actually
-        # read from the slice timings.
         log "slice-to-volume correction with an explicit slspec"
-        EDDY_ARGS+=(--mporder="$MPORDER"
-                    --s2v_niter="$(cfg eddy_s2v_niter 6)"
-                    --slspec="$SLSPEC")
+        EDDY_ARGS+=(--mporder="$(cfg eddy_mporder 6)"
+                    --s2v_niter="$(cfg eddy_s2v_niter 6)")
     else
         warn "no slice timing information -- running volume-to-volume correction only"
         USE_S2V=false

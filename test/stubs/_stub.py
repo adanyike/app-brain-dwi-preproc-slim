@@ -188,6 +188,18 @@ def cmd_topup(argv):
 
 def cmd_eddy(argv):
     options = dict(a.split("=", 1) for a in argv if a.startswith("--") and "=" in a)
+
+    # Reject the invalid combinations the real eddy rejects.  Group-wise outlier
+    # detection and slice-to-volume correction both need the multiband
+    # structure, and eddy exits rather than guessing at it.
+    has_mb_structure = "--slspec" in options or "--mb" in options
+    if options.get("--ol_type") in ("both", "gw") and not has_mb_structure:
+        sys.exit("EddyInputError:  --ol_type indicating mb-groups without "
+                 "providing mb structure\nTerminating program")
+    if "--mporder" in options and not has_mb_structure:
+        sys.exit("EddyInputError:  --mporder specified without providing mb "
+                 "structure\nTerminating program")
+
     imain = load(nii(options["--imain"]))
     data = np.asanyarray(imain.dataobj)
     base = options["--out"]
