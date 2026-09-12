@@ -150,8 +150,26 @@ RUN pip3 install --no-cache-dir --break-system-packages "numpy>=1.24" "nibabel>=
 # Not fatal. Everything except `update_single_subject_reports` works without it,
 # and an image built on a network that cannot reach PyPDF2 should still be a
 # usable image -- run_squad.sh checks at run time and skips just that step.
-RUN ${FSLDIR}/bin/python -m pip install --no-cache-dir "PyPDF2<3" \
-    || echo "WARNING: PyPDF2 is not installed; eddy_squad cannot update single-subject reports" >&2
+#
+# Three ways in, because a pruned FSL may have no working pip of its own: its
+# own pip, pip bootstrapped with ensurepip, and failing both, the system pip
+# installing *into* FSL's site-packages. The install is verified by importing
+# it under FSL's interpreter -- `pip install` reporting success into the wrong
+# environment is the failure this is guarding against.
+RUN { FSL_PY="${FSLDIR}/bin/python"; \
+      if ! "$FSL_PY" -m pip --version >/dev/null 2>&1; then \
+          "$FSL_PY" -m ensurepip --default-pip >/dev/null 2>&1; \
+      fi; \
+      if "$FSL_PY" -m pip --version >/dev/null 2>&1; then \
+          "$FSL_PY" -m pip install --no-cache-dir "PyPDF2<3"; \
+      else \
+          site="$("$FSL_PY" -c 'import site; print(site.getsitepackages()[0])')"; \
+          echo "FSL's python has no pip; installing PyPDF2 into $site with the system pip"; \
+          pip3 install --no-cache-dir --break-system-packages --target "$site" "PyPDF2<3" \
+              || pip3 install --no-cache-dir --target "$site" "PyPDF2<3"; \
+      fi; \
+      "$FSL_PY" -c 'import PyPDF2; print("PyPDF2 " + PyPDF2.__version__ + " importable by FSL python")'; \
+    } || echo "WARNING: PyPDF2 is not installed; eddy_squad cannot update single-subject reports" >&2
 
 # MRtrix3's python drivers (dwibiascorrect and friends) start with
 # `#!/usr/bin/env python`, and Ubuntu 22.04 provides no `python` at all -- only
