@@ -172,7 +172,11 @@ app does not — the failure is followed by a comparison of every eddy input fie
 across the staged subjects, naming the field and which subjects hold which value.
 
 Setting `require_gpu: true` across a project is the way to stop the cohort
-splitting in the first place.
+splitting in the first place. So is using **one kind of sidecar** for the whole
+study: phase encoding derived from the Siemens CSA fields carries the opposite
+sign convention to a BIDS `PhaseEncodingDirection`, which flips both series
+together and leaves the correction unchanged — but changes the acqparams, which
+`eddy_squad` compares exactly. Stage 0 warns when it takes the CSA path.
 
 ### Subjects processed before this App existed
 
