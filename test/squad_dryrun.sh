@@ -244,6 +244,31 @@ check "and on the task page" bash -c '
 check "all four subjects are still in the group database" bash -c '
     [ "$(jq -r ".data_no_subjects" "'"$SCEN2"'/output/squad/group_db.json")" = "4" ]'
 
+# --- and neither does an FSL that cannot merge PDFs ---
+# Only the update step imports PyPDF2. Stand up an FSL python that satisfies
+# every other import and fails that one, which is exactly what a too-eager prune
+# leaves behind.
+SCEN3="$ROOT/3d-no-pypdf2"
+mkdir -p "$SCEN3/fsl/bin" "$SCEN3/fakemods"
+for module in seaborn pandas matplotlib; do : > "$SCEN3/fakemods/$module.py"; done
+cat > "$SCEN3/fsl/bin/python" <<EOSH
+#!/bin/sh
+PYTHONPATH="$SCEN3/fakemods:\${PYTHONPATH:-}" exec python3 "\$@"
+EOSH
+chmod +x "$SCEN3/fsl/bin/python"
+cp -r "$SCEN/input" "$SCEN3/input"
+cp "$SCEN/participants.tsv" "$SCEN3/participants.tsv"
+group_config "$SCEN3/config.json" \
+    "$(jq -n --arg v "$SCEN3/participants.tsv" \
+        '{grouping_variable: $v, update_single_subject_reports: true}')" \
+    "$SCEN3"/input/sub-0*
+( cd "$SCEN3" && PATH="$BIN:$PATH" APP_DIR="$APP" FSLDIR="$SCEN3/fsl" \
+    bash "$APP/run_squad.sh" ) > "$SCEN3/log.txt" 2>&1
+check "an FSL without PyPDF2 still produces the group report" test $? -eq 0
+check "the update was skipped" grep -q "not updating the single-subject reports" "$SCEN3/log.txt"
+check "the missing module is named" grep -q "PyPDF2" "$SCEN3/log.txt"
+check "and the group database is there" test -s "$SCEN3/output/squad/group_db.json"
+
 printf '\n--- 4-unusable-inputs ---\n'
 SCEN="$ROOT/4-unusable"
 mkdir -p "$SCEN/input/empty"

@@ -65,8 +65,18 @@ if is_true "$UPDATE_REPORTS"; then
     # take the whole group run down. The group report is the deliverable; skip
     # the update rather than lose it.
     MISSING="$(jq -r '(.missing_reports // []) | join(", ")' "$COHORTS")"
+    # Only the update step merges PDFs, and only it imports PyPDF2 -- which is
+    # neither a dependency of the group report nor of eddy_quad, so an image can
+    # produce every other output and still have no way to rewrite a subject
+    # report. Check it here rather than let the merge fail after the group run.
+    FSL_PYTHON="${FSLDIR:-/opt/fsl}/bin/python"
+    NO_PYPDF=""
+    [ -x "$FSL_PYTHON" ] && ! "$FSL_PYTHON" -c 'import PyPDF2' >/dev/null 2>&1 && NO_PYPDF=1
     if [ -n "$MISSING" ]; then
         warn "not updating the single-subject reports: no qc.pdf for $MISSING. Re-run those subjects with eddy_qc enabled, or unset update_single_subject_reports."
+        UPDATE_REPORTS=false
+    elif [ -n "$NO_PYPDF" ]; then
+        warn "not updating the single-subject reports: FSL's python cannot import PyPDF2, which eddy_squad uses to merge the study-wise pages into each report. Install it into $FSL_PYTHON's environment, or unset update_single_subject_reports."
         UPDATE_REPORTS=false
     else
         SQUAD_ARGS+=(--update)

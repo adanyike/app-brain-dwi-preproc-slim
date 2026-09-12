@@ -230,6 +230,16 @@ PYEOF
         else
             fail "eddy_squad dependencies" "FSL python cannot import: $missing_mods"
         fi
+        # PyPDF2 is imported only by the update step, which merges the group's
+        # pages into each single-subject report. Its absence costs that feature
+        # alone, so report it without failing the build.
+        CHECKED=$((CHECKED + 1))
+        if "$FSL_PYTHON" -c 'import PyPDF2' >/dev/null 2>&1; then
+            pass "eddy_squad --update dependency (PyPDF2)"
+        else
+            echo "  note  PyPDF2 is missing: eddy_squad can build group reports but" >&2
+            echo "        cannot update single-subject ones (update_single_subject_reports)" >&2
+        fi
     fi
 else
     echo "  skip  eddy_squad not installed; this image cannot run group QC"

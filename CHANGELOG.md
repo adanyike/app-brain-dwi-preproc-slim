@@ -31,7 +31,9 @@
 - `--update` is supported: the QC databases are copied into the work directory
   first, since brainlife stages inputs read-only and `eddy_squad -u` writes into
   the folders it is given, and the rewritten reports are collected under each
-  subject's label.
+  subject's label. It needs two things the group report does not -- every
+  subject's own `qc.pdf`, and `PyPDF2` in FSL's python to merge with -- so both
+  are checked first and the update alone is skipped when either is absent.
 - `product.json` for a group task reports the cohort, the exclusions and the
   per-subject motion, outlier and SNR distributions, worst subject first.
 - Subject and session labels are now settled once, in stage 0, and carried in

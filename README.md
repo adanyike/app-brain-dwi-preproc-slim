@@ -131,10 +131,12 @@ as an array and describes them in `_inputs`, in the same order:
 | `squad/subject_list.txt`, `squad/grouping_variable.txt` | exactly what `eddy_squad` was given |
 | `squad/updated/<subject>_qc_updated.pdf` | single-subject reports with the group's context, when `update_single_subject_reports` is set |
 
-Updating the single-subject reports needs each subject's own `qc.pdf`, which
-`eddy_squad` opens to append the study-wise pages to. When a pooled subject
-published no report the update is skipped, with the subject named, rather than
-losing the group report — which is what `eddy_squad` would do on its own.
+Updating the single-subject reports needs two things the group report itself
+does not: each subject's own `qc.pdf`, which `eddy_squad` opens to append the
+study-wise pages to, and `PyPDF2` in FSL's python, which it merges them with.
+When either is missing the update alone is skipped — naming the subject or the
+module — rather than losing the group report, which is what `eddy_squad` would
+do on its own.
 
 ### Cohorts, and why a group run can refuse
 
