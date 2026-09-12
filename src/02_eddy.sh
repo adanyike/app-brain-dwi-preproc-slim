@@ -60,13 +60,22 @@ EDDY_ARGS=(
 EDDY_NITER="$(cfg eddy_niter 6)"
 EDDY_ARGS+=(--niter="$EDDY_NITER")
 
+# The slice specification tells eddy which slices were excited together.
+# Slice-to-volume correction needs it, but so does group-wise outlier
+# detection, which runs on CPU too -- so pass it whenever one exists, not only
+# when --mporder is in play.
+[ -n "$SLSPEC" ] && EDDY_ARGS+=(--slspec="$SLSPEC") || true
+
 if is_true "$(cfg_bool eddy_repol true)"; then
-    EDDY_ARGS+=(--repol)
-    # --ol_type describes outliers across multiband groups, so it is meaningful
-    # only alongside the slice specification, and eddy refuses it without one.
-    # Both belong to the slice-aware path; on CPU, eddy replaces outliers
-    # slice-wise by default and the volume is corrected volume-to-volume.
-    is_true "$USE_S2V" && EDDY_ARGS+=(--ol_type="$(cfg eddy_ol_type both)") || true
+    OL_TYPE="$(cfg eddy_ol_type both)"
+    # 'both' and 'gw' detect outliers across multiband groups and eddy refuses
+    # them outright without a slice specification.  Degrade to slice-wise
+    # rather than handing it an invalid combination.
+    if [ -z "$SLSPEC" ] && [ "$OL_TYPE" != sw ]; then
+        warn "no slice specification available -- outlier detection falls back to --ol_type=sw ('$OL_TYPE' needs the multiband structure)"
+        OL_TYPE=sw
+    fi
+    EDDY_ARGS+=(--repol --ol_type="$OL_TYPE")
 fi
 
 EDDY_FWHM="$(cfg eddy_fwhm '10,6,0,0,0,0')"
@@ -80,8 +89,7 @@ fi
 if is_true "$USE_S2V"; then
     log "slice-to-volume correction with an explicit slspec"
     EDDY_ARGS+=(--mporder="$(cfg eddy_mporder 6)"
-                --s2v_niter="$(cfg eddy_s2v_niter 6)"
-                --slspec="$SLSPEC")
+                --s2v_niter="$(cfg eddy_s2v_niter 6)")
 fi
 
 is_true "$(cfg_bool eddy_data_is_shelled true)" && EDDY_ARGS+=(--data_is_shelled) || true

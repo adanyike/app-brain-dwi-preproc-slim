@@ -46,11 +46,11 @@ reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction.
   `eddy` needs for slice-to-volume correction.
 - `eddy` selects a CUDA build when one is installed, whatever it is called, and
   falls back to a CPU build — without slice-to-volume correction — when there is
-  none. Which happened is recorded in the summary. Everything slice-aware —
-  `--slspec`, `--mporder` and `--ol_type` — belongs to that CUDA path and is
-  omitted on CPU, where `eddy` replaces outliers slice-wise by default;
-  `--ol_type` describes outliers across multiband groups and `eddy` refuses it
-  without a slice specification.
+  none. Which happened is recorded in the summary. The slice specification is
+  passed whenever one exists, not only for slice-to-volume correction, because
+  group-wise outlier replacement needs the multiband structure and runs on CPU
+  too; without a slice specification `--ol_type` degrades to `sw` rather than
+  being handed to `eddy` as an invalid combination.
 - The shell to fit is detected from the bvals, so `dtifit_shell` accepts `all`,
   `lowest`, `highest` or an explicit b-value instead of a hard-coded literal.
   Naming a shell the data does not contain is refused up front, and the resolved
