@@ -73,10 +73,11 @@ check "gradients match the merged volume count" bash -c '
     [ "$n" = "20" ]'
 check "topup ran"                grep -q -- "--topup=" <<< "$(eddy_cmd)"
 check "no slice-to-volume on CPU" bash -c '! grep -q -- "--mporder" <<< "$(cat "'"$SCEN"'"/work/eddy/eddy_corrected.eddy_command_txt)"'
-# The slspec is still needed without --mporder: group-wise outlier detection
-# uses it, and eddy refuses --ol_type=both without the multiband structure.
-check "slspec passed even without s2v" grep -q -- "--slspec=" <<< "$(eddy_cmd)"
-check "group-wise outlier detection kept" grep -q -- "--ol_type=both" <<< "$(eddy_cmd)"
+# Everything slice-aware belongs to the CUDA path: no slspec and no --ol_type
+# on CPU, so eddy replaces outliers slice-wise by its own default.
+check "no slspec on CPU"        bash -c '! grep -q -- "--slspec" <<< "$(cat "'"$SCEN"'"/work/eddy/eddy_corrected.eddy_command_txt)"'
+check "no --ol_type on CPU"     bash -c '! grep -q -- "--ol_type" <<< "$(cat "'"$SCEN"'"/work/eddy/eddy_corrected.eddy_command_txt)"'
+check "outlier replacement still on" grep -q -- "--repol" <<< "$(eddy_cmd)"
 check "50 ROIs x 4 metrics recorded" bash -c '
     [ "$(tail -n +2 "'"$SCEN"'/output/roistats/roi_stats.csv" | wc -l)" = "200" ]'
 check "topup config picked for a /4 matrix" \
@@ -91,6 +92,7 @@ check "slice-to-volume enabled" grep -q -- "--mporder=6" <<< "$(eddy_cmd)"
 check "slspec passed"           grep -q -- "--slspec=" <<< "$(eddy_cmd)"
 check "s2v iterations passed"   grep -q -- "--s2v_niter=6" <<< "$(eddy_cmd)"
 check "outlier replacement on"  grep -q -- "--repol" <<< "$(eddy_cmd)"
+check "group-wise outliers on GPU" grep -q -- "--ol_type=both" <<< "$(eddy_cmd)"
 check "product reports s2v"     bash -c '[ "$(jq -r .provenance.slice_to_volume_correction "'"$SCEN"'/product.json")" = "true" ]'
 check "slspec published to qc"  test -s "$SCEN/output/qc/slspec.txt"
 
@@ -328,9 +330,8 @@ check "no slspec passed" bash -c '
     ! grep -q -- "--slspec" "'"$SCEN"'/work/eddy/eddy_corrected.eddy_command_txt"'
 check "slice-to-volume disabled" bash -c '
     ! grep -q -- "--mporder" "'"$SCEN"'/work/eddy/eddy_corrected.eddy_command_txt"'
-check "outlier detection degrades to slice-wise" bash -c '
-    grep -q -- "--ol_type=sw" "'"$SCEN"'/work/eddy/eddy_corrected.eddy_command_txt"'
-check "the degradation is announced" grep -q "falls back to --ol_type=sw" "$SCEN/log.txt"
+check "no --ol_type without a slspec" bash -c '
+    ! grep -q -- "--ol_type" "'"$SCEN"'/work/eddy/eddy_corrected.eddy_command_txt"'
 check "product records no slice-to-volume" bash -c '
     [ "$(jq -r .provenance.slice_to_volume_correction "'"$SCEN"'/product.json")" = "false" ]'
 
