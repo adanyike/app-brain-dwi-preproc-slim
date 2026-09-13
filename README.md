@@ -45,6 +45,15 @@ Three details worth knowing, because they are derived rather than assumed:
   results are very close to identical — and the resolved config is recorded in
   `product.json`.
 
+* **The brain mask is checked against the image, not trusted.** `bet` sometimes
+  returns a mask with a bite out of it or one that stops short of the temporal
+  lobes, and nothing downstream notices: the run completes and every output is
+  shaped exactly like a good one's. Both masks are measured against the image
+  they were extracted from, a mask that is missing brain is repaired
+  additively and within a cap, and the verdict, the numbers and a PNG overlay
+  are published either way. See
+  [Brain mask coverage](#brain-mask-coverage) below.
+
 Because of that last point, every acquired slice is kept whatever the slice
 count. There is no reason to crop or duplicate a slice to make the count even:
 [FSL withdrew that advice](https://fsl.fmrib.ox.ac.uk/fsl/docs/diffusion/topup/users_guide/index.html)
@@ -98,12 +107,203 @@ volume-to-volume only and records that in the summary.
 | `tensor` | `neuro/tensor` | Tensor, FA, MD, AD, RD, CL, CP, CS, colour FA, V1, S0 |
 | `roistats` | `raw` | Per-ROI statistics, tidy and wide CSV, plus JSON |
 | `reg` | `raw` | Atlas in native space and the ANTs transforms |
-| `qc` | `raw` | `eddy_quad` report, motion and outlier files, derived acquisition parameters |
+| `qc` | `raw` | `eddy_quad` report, motion and outlier files, derived acquisition parameters, brain-mask coverage reports and overlays, and the mask `eddy` used with the image it was judged against |
+| `eddyqc` | `raw` | `qc.json`, `qc.pdf` and the cohort signature — the lean dataset the group QC App consumes |
 
 `roistats/roi_stats.csv` has one row per metric and ROI, carrying `subject`,
 `session` and `run_id` so results from many subjects can be concatenated
 directly. `roistats/<METRIC>_mean.csv` is the same data one row per subject,
 one column per ROI.
+
+## Brain mask coverage
+
+The mask matters more than it looks. The stage-1 mask is what `eddy --mask` is
+given, and `eddy` estimates its Gaussian-process predictions and its outlier
+detection inside it, so a mask with a bite out of it degrades the corrected data
+*everywhere*, not only near the defect — and because the same mask bounds
+`eddy_quad`'s voxel-wise metrics, a bad mask partly hides itself from its own QC
+report. The stage-3 mask is published as `neuro/mask` and bounds `dtifit` and
+every ROI average.
+
+So both are measured against the image they came from, and the verdict is one of
+three:
+
+| Verdict | Meaning | What happens |
+|---|---|---|
+| `ok` | nothing brain-bright is left outside the mask beyond `mask_warn_fraction` of its volume, and the mask tapers rather than ending abruptly | nothing |
+| `suspicious` | brain is missing: a chunk, or a mask that stops mid-brain | repaired, unless `mask_repair` says otherwise |
+| `implausible` | not a brain at all — a few percent of the field of view, a volume outside the range a brain can be, or a centre far from the centre of the signal (`bet` landing on the neck) | **never** repaired: growing it would hide the only symptom |
+
+Two detectors have to agree that something is missing, and they are chosen
+because each sees what the other cannot. One reflects the mask about its own
+centroid along the left-right axis: where the other hemisphere has brain and this
+side does not, something was removed. The other looks inside the union of the
+three directional span fills and within a couple of voxels of the mask. A third
+measurement, the per-slice area profile, catches the one defect neither sees — a
+mask that ends at half its widest slice instead of tapering. Missing voxels are
+then split in two, because they call for opposite responses: where there is
+signal the mask is at fault and can be repaired, and where the image is dark too
+the **data** is at fault — a dropout — which is reported and never masked over,
+since `eddy`'s outlier replacement, not a bigger mask, is what addresses it.
+
+Two numbers decide it, and both are measured rather than assumed. A defect that
+is spread out has to exceed `mask_warn_fraction` of the mask volume; a defect
+that is concentrated is caught by the localisation blocks instead, since a bite
+worth repairing can be far too small to move a whole-mask fraction. On real
+1.5 mm data a healthy `bet` mask leaves 0.04–0.18% of its volume as brain-bright
+signal just outside it, and its worst block is 8–16% missing — the ragged edge
+at the temporal poles and orbitofrontal cortex that every mask has. The defaults
+sit several times above both, so a normal subject reads `ok` and a real bite does
+not.
+
+The repair is deliberately dull: union with a second `bet` at a lower threshold,
+confined to the neighbourhood of the defect so the rest of the mask stays exactly
+as `bet` made it, plus enclosed holes, only where there is signal, never into a
+dropout, and never removing a voxel. If it would add more than the cap it is
+discarded whole and the mask is reported instead — a repair that large is not a
+repair. The cap differs by stage on purpose: losing brain is the expensive error
+for `eddy`, while an over-inclusive published mask contaminates every ROI mean,
+so stage 3's cap is the tighter one.
+
+A repaired stage-1 mask changes `eddy`'s output, so it is never quiet about it:
+the log warns, the task page says so in those terms, and `product.json` records
+the before and after voxel counts.
+
+Published in `qc/`: `mask_qc_eddy.json` and `mask_qc_final.json` (the full
+measurements), `mask_overlay_eddy.png` and `mask_overlay_final.png` (slices with
+the mask outline, what was found missing in yellow and anything the repair added
+in green), and `eddy_mask.nii.gz` with `eddy_meanb0.nii.gz` — the mask `eddy`
+actually used and the image it was judged against, neither of which the App
+published before. Without the pair, "was the mask the problem?" cannot be
+answered after the fact: `meanb0.nii.gz` is the *stage-3* mean b=0, not the one
+stage 1 masked.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `mask_check` | `true` | Measure both masks against the image |
+| `mask_repair` | `auto` | `auto` repairs only a mask the check flags; `always` repairs every subject's, so a study is processed identically; `never` reports and changes nothing |
+| `mask_repair_f` | `auto` | The `bet` threshold for the permissive estimate. `auto` is the stage's own `f` minus 0.2 |
+| `mask_warn_fraction` | `0.01` | How much brain-bright signal outside the mask, as a fraction of its volume, counts as missing brain |
+| `mask_min_defect_block` | `0.35` | How much of one 8×8×4 localisation block must be missing before a *concentrated* defect is called one. Below this it is the ragged edge every `bet` mask has |
+| `mask_repair_cap` / `mask_repair_cap_final` | `0.25` / `0.1` | Discard the repair if it would add more than this fraction of the mask |
+| `mask_repair_grow` | `0` | Extra intensity-growth iterations on the stage-1 mask. Off by default; bounded above by the in-mask 99.5th percentile so it cannot walk into the skull |
+| `mask_figure` | `true` | Write the overlay PNGs |
+
+A note for group analysis: mask repair is a per-subject difference that
+`eddy_squad` cannot see — it compares eddy's parameters, not masks — so it never
+splits a cohort. A study that wants strict comparability should set `mask_repair`
+to `always` or `never` explicitly rather than leaving subjects to differ.
+
+## Group quality control (eddy SQUAD)
+
+`eddy_quad` assesses one subject; FSL's `eddy_squad` assesses a study, flagging
+the subjects that sit in the tail of the group's motion, outlier and CNR
+distributions. It is a separate brainlife App — it takes N subjects where the
+pipeline takes one — registered against this same repository and container:
+`main` routes a task to `run_squad.sh` when its config carries the group input,
+and to `run.sh` otherwise.
+
+Run it over the `eddyqc` datasets the pipeline published, with the App's input
+set to accept multiple datasets. brainlife then writes them into `config.json`
+as an array and describes them in `_inputs`, in the same order:
+
+```json
+{ "eddyqc": ["../5f0e.../eddyqc", "../5f0f.../eddyqc"] }
+```
+
+| Output | Contents |
+|---|---|
+| `squad/group_qc.pdf` | the study-wise report |
+| `squad/group_db.json` | the study-wise database |
+| `squad/cohorts.json` | which subjects pooled, which did not, and why |
+| `squad/subject_list.txt`, `squad/grouping_variable.txt` | exactly what `eddy_squad` was given |
+| `squad/updated/<subject>_qc_updated.pdf` | single-subject reports with the group's context, unless `update_single_subject_reports` is turned off |
+
+Updating the single-subject reports happens by default, because a subject's own
+report flagged against its group is half the point of running SQUAD. It needs one
+thing the group report itself does not: each pooled subject's own `qc.pdf`, which
+`eddy_squad` opens to append the study-wise pages to. When a subject has not
+published one, the update alone is skipped and that subject is named, rather than
+losing the group report — which is what `eddy_squad` would do on its own.
+
+If the image's FSL cannot perform the update at all, the App publishes the group
+report regardless and the log says why. Set `update_single_subject_reports` to
+false to skip the attempt.
+
+### Cohorts, and why a group run can refuse
+
+`eddy_squad` pools subjects only when `eddy` was run with the same features for
+all of them — it compares six flags in each `qc.json` and raises
+`Eddy output inconsistency detected!` otherwise. On brainlife every subject is
+an independently launched task, so that is easy to trip:
+
+* **no GPU on the node** → no slice-to-volume metrics (`qc_s2v_params_flag`);
+* **no reverse phase-encoded series** → no susceptibility field (`qc_field_flag`);
+* **`eddy_repol`, `eddy_cnr_maps`, `eddy_residuals` changed between submissions**
+  → no outlier, CNR or residual metrics.
+
+Newer FSL releases compare the eddy **input** data as well, and refuse the study
+with `Inconsistency detected in eddy input data in <field>!` when subjects
+disagree on the acquisition — the topup acquisition parameters, the shell
+b-values, the voxel size, the volume counts.
+
+So each subject publishes a **cohort signature** (`eddyqc/squad_ready.json`, also
+shown on the task page): those six flags plus every acquisition field SQUAD
+compares, taken **exactly** as QUAD wrote them. The comparison is exact because
+SQUAD's is: a b-value of 1495 against 1500 is a different cohort, since pooling
+them would fail the whole study rather than split it. The group App buckets its
+inputs by signature, reports on the largest cohort, and names the subjects it
+left out and the field that differs, with both values — rather than failing on
+subject 37. Run it again with `cohort` set to another signature to report on that
+one too, or set `require_homogeneous` to refuse the split instead of choosing.
+
+If your FSL turns out to tolerate a difference, narrow what the key compares with
+`signature_fields` (a list of `data_*` field names) and those subjects pool again.
+And if a group run is refused anyway — a future release comparing something this
+app does not — the failure is followed by a comparison of every eddy input field
+across the staged subjects, naming the field and which subjects hold which value.
+
+Setting `require_gpu: true` across a project is the way to stop the cohort
+splitting in the first place. So is using **one kind of sidecar** for the whole
+study: phase encoding derived from the Siemens CSA fields carries the opposite
+sign convention to a BIDS `PhaseEncodingDirection`, which flips both series
+together and leaves the correction unchanged — but changes the acqparams, which
+`eddy_squad` compares exactly. Stage 0 warns when it takes the CSA path.
+
+### Subjects processed before this App existed
+
+Nothing needs reprocessing. `eddy_quad` has always published `qc.json`, and that
+is all `eddy_squad` reads — so an older task's `output/qc/eddy_quad/` is a valid
+input, and old and new subjects pool together as long as `eddy` ran with the
+same features. Two things differ: those datasets carry no `squad_ready.json`, so
+subject labels come from brainlife's input metadata or the directory name (use
+`subject_labels` if neither is right), and to see one subject's signature
+without a group run, summarise its database directly:
+
+```bash
+python3 python/eddyqc_summary.py --qc-json <task>/output/qc/eddy_quad/qc.json \
+    --subject sub-01 --out squad_ready.json
+```
+
+### Group configuration
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `eddyqc` | — | The per-subject eddy QC datasets. A path to a `qc.json`, to any folder holding one (`eddyqc/`, an archived `qc` dataset, or an older task's `output/qc/eddy_quad/`), or a list of either |
+| `grouping_variable` | — | A `participants.tsv`-style table with a subject column and one value column, matched **by subject name**; or a file already in `eddy_squad`'s own format, matched by position |
+| `variable_name` / `variable_is_continuous` | column name / `false` | Label for the variable, and whether to draw scatter plots with a regression fit (continuous) or violin plots per class (categorical) |
+| `update_single_subject_reports` | `true` | Also rewrite each subject's own report with study-wise context. Needs that subject's `qc.pdf` among the inputs |
+| `cohort` | largest | The signature (or its short hash) of the cohort to report on |
+| `require_homogeneous` | `false` | Fail when the inputs split into more than one cohort, instead of choosing the largest |
+| `min_subjects` | `2` | Refuse to call a smaller group a study |
+| `signature_fields` | every `data_*` field | Which acquisition fields decide cohort membership. Narrow it when your FSL tolerates a difference |
+| `subject_labels` | from the data | Comma-separated labels overriding the ones taken from `squad_ready.json` / `_inputs` |
+
+The grouping variable is matched by name wherever it can be: `eddy_squad` itself
+matches values to subjects by line position, which silently attributes one
+subject's value to another as soon as a subject is excluded from the cohort.
+Supplying a table with a subject column lets the App order the values to match
+the subject list it actually staged, and refuse when a value is missing.
 
 ## Configuration
 
@@ -127,6 +327,7 @@ Every parameter is optional.
 | `template_fa` / `atlas` | FSL's JHU data | Override the FA template and label image the atlas stage uses |
 | `atlas_labels` | `templates/JHU-ICBM-labels.json` | ROI names and abbreviations for the label image |
 | `roi_metrics` | `FA, MD, AD, RD` | Metrics to summarise per ROI |
+| `mask_check` / `mask_repair` | `true` / `auto` | Brain-mask coverage check and repair — see [Brain mask coverage](#brain-mask-coverage) |
 | `subject` / `session` | from input metadata | Labels written into the results |
 | `nthreads` | all cores | Threads for MRtrix3, ANTs and OpenMP |
 
@@ -136,7 +337,8 @@ of `eddy`. Without one the app completes but skips it.
 ## Running it
 
 **On brainlife**, submit the app against a diffusion dataset from the Apps page,
-or add it to a pipeline rule to process a whole project.
+or add it to a pipeline rule to process a whole project. The group QC App is
+submitted the same way, against the `eddyqc` datasets of a processed project.
 
 **Locally**, the app runs from a directory containing a `config.json` that names
 your files:
@@ -151,6 +353,10 @@ $EDITOR config.json
 `main` selects Singularity, Docker or a local toolchain automatically and passes
 a GPU through when one is present. Results appear in `output/` and
 `product.json`.
+
+For a group QC run, start from `config.json.squad.example` instead; `main`
+recognises it by its `eddyqc` input and runs `run_squad.sh`. No GPU is needed —
+it reads the QC databases, not the images.
 
 The container is pulled, not built: `main` defaults to
 `docker://nyeguh/brain-dwi-preproc-slim:1.0.0`. Point `APP_IMAGE` at another tag

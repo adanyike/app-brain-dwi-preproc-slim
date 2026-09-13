@@ -3,8 +3,9 @@
 #
 # fslinstaller.py installs the whole distribution -- FSLeyes and its GUI stack,
 # every atlas, the FIRST shape models, FEAT, MELODIC, possum, xtract data.  This
-# pipeline uses nine FSL programs: fslval, fslroi, fslmerge, fslmaths, bet,
-# topup, eddy (CUDA or CPU), dtifit and eddy_quad.
+# pipeline uses ten FSL programs: fslval, fslroi, fslmerge, fslmaths, bet,
+# topup, eddy (CUDA or CPU), dtifit, eddy_quad and -- for the group QC App that
+# shares this image -- eddy_squad.
 #
 # This is a blacklist, not a whitelist, and deliberately so.  Deleting a
 # named subsystem that turns out to be needed is caught immediately by
@@ -67,9 +68,10 @@ drop "refdoc"         "$FSLDIR/refdoc"
 # FSLeyes is a wxPython desktop viewer. There is no display in a batch
 # container, and nothing in this pipeline launches it.
 #
-# matplotlib and pandas are deliberately NOT in this list: eddy_quad renders its
-# QC report with matplotlib, and `eddy_quad --help` does not import it, so
-# deleting them produces an image whose QC stage fails only at run time.
+# matplotlib, pandas and seaborn are deliberately NOT in this list: eddy_quad
+# renders its QC report with matplotlib and eddy_squad draws its study-wise
+# plots with seaborn, while neither --help imports them, so deleting them
+# produces an image whose QC fails only at run time.
 drop "FSLeyes viewer" "$FSLDIR/bin/fsleyes" "$FSLDIR/bin/fsleyes_"*
 for pkg in fsleyes fsleyes_props fsleyes_widgets wx wxPython PyQt5 PySide2 \
            notebook jupyter jupyterlab IPython ipython sphinx; do

@@ -15,6 +15,9 @@ set -uo pipefail
 FAILED=0
 CHECKED=0
 
+# This script lives in <app>/docker/, in the image and in a checkout alike.
+APP_ROOT="${APP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
 fail() { printf '  FAIL  %-28s %s\n' "$1" "$2" >&2; FAILED=$((FAILED + 1)); }
 pass() { printf '  ok    %s\n' "$1"; }
 
@@ -205,6 +208,63 @@ else
     echo "  skip  eddy_quad not installed; set eddy_qc=false in config.json"
 fi
 
+# The study-wise half of the same toolkit, used by run_squad.sh rather than the
+# per-subject pipeline. It imports seaborn, which eddy_quad never does, so the
+# check above would pass on an image whose group QC dies at run time.
+if command -v eddy_squad >/dev/null 2>&1; then
+    check_runs eddy_squad --help
+    CHECKED=$((CHECKED + 1))
+    FSL_PYTHON="${FSLDIR:-/opt/fsl}/bin/python"
+    if [ ! -x "$FSL_PYTHON" ]; then
+        fail "eddy_squad dependencies" "FSL's python is missing at $FSL_PYTHON"
+    else
+        missing_mods="$("$FSL_PYTHON" - <<'PYEOF' 2>/dev/null
+missing = []
+for module in ("seaborn", "pandas", "matplotlib", "numpy"):
+    try:
+        __import__(module)
+    except Exception:
+        missing.append(module)
+print(",".join(missing))
+PYEOF
+)"
+        if [ -z "$missing_mods" ]; then
+            pass "eddy_squad dependencies (seaborn, pandas, matplotlib, numpy)"
+        else
+            fail "eddy_squad dependencies" "FSL python cannot import: $missing_mods"
+        fi
+        # PyPDF2 is imported only by the update step, which merges the group's
+        # pages into each single-subject report. Its absence costs that feature
+        # alone, so report it without failing the build.
+        CHECKED=$((CHECKED + 1))
+        if "$FSL_PYTHON" -c 'import PyPDF2' >/dev/null 2>&1; then
+            pass "eddy_squad --update dependency (PyPDF2)"
+        else
+            echo "  note  PyPDF2 is missing: eddy_squad can build group reports but" >&2
+            echo "        cannot update single-subject ones (update_single_subject_reports)" >&2
+        fi
+
+        # FSL 6.0.7.x ships an eddy_qc whose update step cannot run: ref_page
+        # calls ec.MethodsText() on the empty list squad_update hands it. The
+        # Dockerfile guards that call, so report which state this image is in --
+        # a note either way, since the group report does not depend on it.
+        CHECKED=$((CHECKED + 1))
+        REF_PAGE="$("$FSL_PYTHON" -c 'import eddy_qc.utils.ref_page as m; print(m.__file__)' 2>/dev/null)"
+        if [ -z "$REF_PAGE" ] || [ ! -f "$REF_PAGE" ]; then
+            echo "  note  eddy_qc.utils.ref_page not found; cannot tell whether --update works" >&2
+        elif grep -q 'hasattr(ec, "MethodsText")' "$REF_PAGE"; then
+            pass "eddy_squad --update is patched for the ref_page bug"
+        elif grep -q 'ec\.MethodsText()' "$REF_PAGE"; then
+            echo "  note  ref_page.py still calls ec.MethodsText() unguarded: eddy_squad" >&2
+            echo "        --update will fail and the group report will be produced without it" >&2
+        else
+            pass "eddy_squad --update needs no patch in this FSL"
+        fi
+    fi
+else
+    echo "  skip  eddy_squad not installed; this image cannot run group QC"
+fi
+
 echo "MRtrix3"
 for tool in mrinfo mrconvert mrcalc mrmath mrstats dwiextract dwidenoise mrdegibbs dwi2mask; do
     check_runs "$tool" -help
@@ -249,6 +309,53 @@ then
     fi
 else
     fail "round trip" "could not write a test NIfTI"
+fi
+
+# The brain-mask coverage check, end to end, under the *system* interpreter.
+#
+# It is the one part of the pipeline that does its own morphology and writes its
+# own PNG, so nothing else in this selftest would notice if the system python
+# lost numpy's ufunc machinery or zlib. A sphere with a bite taken out of it has
+# a known right answer, so this asserts the verdict rather than merely that the
+# script ran.
+echo "brain mask coverage"
+CHECKED=$((CHECKED + 1))
+MASK_QC="${APP_ROOT:-/opt/app}/python/mask_qc.py"
+if [ ! -f "$MASK_QC" ]; then
+    fail "mask_qc.py" "not found at $MASK_QC"
+elif python3 - "$TMP" <<'PY' >/dev/null 2>&1
+import sys
+import numpy as np
+import nibabel as nib
+out = sys.argv[1]
+n = 64                      # 128 mm at 2 mm: a head-sized field of view
+grid = [np.arange(n) - (n - 1) / 2.0] * 3
+ii, jj, kk = np.meshgrid(*grid, indexing="ij")
+distance = np.sqrt(ii ** 2 + jj ** 2 + kk ** 2)
+brain = distance < 22       # ~357 ml, inside the range a brain can be
+image = np.zeros((n, n, n), dtype=np.float32)
+image[brain] = 1000.0
+bite = np.sqrt((ii + 16) ** 2 + jj ** 2 + kk ** 2) < 8
+affine = np.diag([-2.0, 2.0, 2.0, 1.0])
+nib.save(nib.Nifti1Image(image, affine), out + "/mq_image.nii.gz")
+nib.save(nib.Nifti1Image((brain & ~bite).astype(np.uint8), affine),
+         out + "/mq_mask.nii.gz")
+PY
+then
+    MQ_VERDICT="$(python3 "$MASK_QC" check --image "$TMP/mq_image.nii.gz" \
+        --mask "$TMP/mq_mask.nii.gz" --out "$TMP/mq_report.json" 2>/dev/null)"
+    if [ "$MQ_VERDICT" != suspicious ]; then
+        fail "mask coverage check" "a bitten mask was called '${MQ_VERDICT:-nothing}'"
+    elif ! python3 "$MASK_QC" figure --image "$TMP/mq_image.nii.gz" \
+            --mask "$TMP/mq_mask.nii.gz" --out "$TMP/mq.png" >/dev/null 2>&1; then
+        fail "mask overlay" "the PNG writer failed"
+    elif [ "$(head -c 8 "$TMP/mq.png" | cut -c2-4)" != PNG ]; then
+        fail "mask overlay" "the overlay is not a PNG"
+    else
+        pass "brain-mask coverage check and overlay"
+    fi
+else
+    fail "mask coverage check" "could not write the test volumes"
 fi
 
 echo

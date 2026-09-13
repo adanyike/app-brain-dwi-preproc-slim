@@ -41,6 +41,14 @@ fslmaths "$PROC/brain_mask.nii.gz" -fillh "$PROC/brain_mask_filled.nii.gz"
 mv "$PROC/brain_mask_filled.nii.gz" "$PROC/brain_mask.nii.gz"
 FINAL_MASK="$PROC/brain_mask.nii.gz"
 
+# The trade-off reverses here. This mask is published as neuro/mask and bounds
+# dtifit and every ROI average, so an over-inclusive mask contaminates the
+# numbers and sends downstream tractography into the skull: the union and the
+# hole fill, never intensity growth, and a tighter cap than stage 1's.
+MASK_QC_DIR="${MASK_QC_DIR:-$WORK_DIR/maskqc}"
+check_brain_mask final "$PROC/meanb0.nii.gz" "$FINAL_MASK" "$BET_F" "$MASK_QC_DIR" \
+    "$(cfg mask_repair_cap_final 0.10)" 0
+
 # --------------------------------------------------------- shell selection ----
 # dtifit's monoexponential model is not valid across a multi-shell acquisition,
 # so by default one diffusion-weighted shell is fitted together with the b=0
