@@ -3,8 +3,9 @@
 
 Contains a short provenance block, any warnings worth surfacing (missing
 reverse-phase-encode data, ROIs that fell outside the field of view, high
-motion), and two plotly figures: mean FA per ROI, and per-volume motion from
-eddy's movement-RMS file when it exists.
+motion, a brain mask that does not cover the brain), and up to three plotly
+figures: mean FA per ROI, per-volume motion from eddy's movement-RMS file, and
+the per-slice brain-mask coverage profile.
 """
 
 from __future__ import annotations
@@ -68,6 +69,108 @@ def fa_figure(stats: List[dict]) -> Dict[str, Any] | None:
     }
 
 
+def mask_qc_messages(reports: Dict[str, dict]) -> List[Dict[str, str]]:
+    """What the brain-mask coverage check found, per mask.
+
+    A repair is reported as a change in results, not as housekeeping: the
+    stage-1 mask is eddy's, so a repaired mask means the corrected data differs
+    from what an unrepaired run would have produced, and nobody reading the task
+    page later should have to infer that.
+    """
+    messages: List[Dict[str, str]] = []
+    for label, report in sorted(reports.items()):
+        if not report:
+            continue
+        verdict = report.get("verdict", "?")
+        missing = report.get("missing", {})
+        repair = report.get("repair", {})
+        where = ("; worst around %s mm"
+                 % report["worst_block"]["centre_mm"]) if (
+                     report.get("worst_block", {}).get("centre_mm")
+                     and report["worst_block"].get("fraction", 0) > 0.25) else ""
+
+        if verdict == "ok":
+            level, text = "info", (
+                "Brain mask (%s) covers the brain: %.0f ml, nothing brain-bright "
+                "left outside it beyond %.1f%% of its volume."
+                % (label, report.get("volume_ml", 0),
+                   100.0 * missing.get("bright_fraction", 0.0)))
+        elif verdict == "implausible":
+            level, text = "warning", (
+                "Brain mask (%s) is not a brain: %s. It was NOT repaired -- "
+                "growing it would hide the problem. Check qc/mask_overlay_%s.png "
+                "and re-run with a different bet threshold."
+                % (label, "; ".join(report.get("reasons", [])) or "see the report",
+                   label))
+        else:
+            level, text = "warning", (
+                "Brain mask (%s) looks like it is missing brain: %s%s."
+                % (label, "; ".join(report.get("reasons", [])) or "see the report",
+                   where))
+        messages.append({"type": level, "msg": text})
+
+        if repair.get("applied"):
+            messages.append({"type": "warning", "msg":
+                "Brain mask (%s) was repaired: %d voxels added (%.1f%% of it), %s. "
+                "Everything computed from this mask therefore differs from an "
+                "unrepaired run%s."
+                % (label, repair.get("added_voxels", 0),
+                   100.0 * repair.get("added_fraction", 0.0),
+                   "; ".join(step["step"] for step in repair.get("steps", []))
+                   or "additively",
+                   " -- including eddy's corrected data, since this is the mask "
+                   "eddy was given" if label == "eddy" else "")})
+        elif repair and repair.get("reason"):
+            messages.append({"type": "warning", "msg":
+                "Brain mask (%s) was left as bet made it: %s"
+                % (label, repair["reason"])})
+
+        for note in report.get("notes", []):
+            if report.get("dropout") and "dark" in note:
+                messages.append({"type": "warning", "msg":
+                    "Brain mask (%s): %s" % (label, note)})
+            elif "field of view" in note and "clipped" in note:
+                messages.append({"type": "warning", "msg":
+                    "Brain mask (%s): %s" % (label, note)})
+    return messages
+
+
+def mask_qc_figure(reports: Dict[str, dict]) -> Dict[str, Any] | None:
+    """Per-slice mask area, with the missing area beside it.
+
+    Two traces per mask: a bite shows as a dip in the area curve with a bump in
+    the missing one at the same slice, which is the cheapest way to see *where*
+    without opening the images.
+    """
+    traces = []
+    palette = {"eddy": "#4c78a8", "final": "#54a968"}
+    for label, report in sorted(reports.items()):
+        profile = (report or {}).get("slice_profile") or {}
+        area = profile.get("mask_area") or []
+        if not area:
+            continue
+        colour = palette.get(label, "#9d755d")
+        traces.append({"type": "scatter", "mode": "lines", "y": area,
+                       "name": "%s mask" % label, "line": {"color": colour}})
+        missing = profile.get("missing_area") or []
+        if any(missing):
+            traces.append({"type": "scatter", "mode": "lines", "y": missing,
+                           "name": "%s missing" % label,
+                           "line": {"color": "#e45756", "dash": "dot"}})
+    if not traces:
+        return None
+    return {
+        "type": "plotly",
+        "name": "Brain mask coverage",
+        "data": traces,
+        "layout": {
+            "title": "Mask area per slice (dotted: brain-bright signal outside the mask)",
+            "xaxis": {"title": "slice"},
+            "yaxis": {"title": "voxels"},
+        },
+    }
+
+
 def motion_figure(rms: Sequence[float]) -> Dict[str, Any] | None:
     if not rms:
         return None
@@ -95,6 +198,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--roi-stats", help="roi_stats.json from stage 5")
     ap.add_argument("--shells", help="shells.json from stage 3")
     ap.add_argument("--eddy-qc", help="squad_ready.json from stage 6")
+    ap.add_argument("--mask-qc", action="append", default=[], metavar="LABEL=PATH",
+                    help="a brain-mask coverage report; repeatable")
     ap.add_argument("--eddy-movement-rms", help="<eddy_base>.eddy_movement_rms")
     ap.add_argument("--eddy-binary", default="")
     ap.add_argument("--slice-to-volume", default="false")
@@ -184,6 +289,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             % (eddy_qc.get("signature_hash", "?"), eddy_qc.get("signature", ""),
                " Not available for this subject: %s." % "; ".join(off) if off else "")})
 
+    mask_reports: Dict[str, dict] = {}
+    for item in args.mask_qc:
+        label, _, path = item.partition("=")
+        if not path:
+            print("make_product: ignoring --mask-qc %r (expected LABEL=PATH)" % item,
+                  file=sys.stderr)
+            continue
+        mask_reports[label] = read_json(path)
+    messages.extend(mask_qc_messages(mask_reports))
+
     empty = roi.get("empty_rois") or []
     if empty:
         messages.append({"type": "warning", "msg":
@@ -195,7 +310,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "Extracted %s for all %d JHU ICBM-DTI-81 white-matter ROIs."
             % ("/".join(roi.get("metrics", [])), roi.get("n_rois", 0))})
 
-    figures = [f for f in (fa_figure(roi.get("stats", [])), motion_figure(rms)) if f]
+    figures = [f for f in (fa_figure(roi.get("stats", [])), motion_figure(rms),
+                           mask_qc_figure(mask_reports)) if f]
 
     product: Dict[str, Any] = {
         "brainlife": messages + figures,
@@ -211,6 +327,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             "eddy_qc": {k: eddy_qc[k] for k in ("signature", "signature_hash",
                                                 "eddy_flags", "protocol")
                         if k in eddy_qc},
+            # The masks, and whether either was repaired, belong in provenance
+            # rather than only in the log: a repaired mask is the difference
+            # between two runs of the same data.
+            "brain_mask": {
+                label: {key: report[key]
+                        for key in ("verdict", "volume_ml", "n_voxels", "reasons",
+                                    "repair", "dropout")
+                        if key in report}
+                for label, report in sorted(mask_reports.items()) if report},
         },
     }
 

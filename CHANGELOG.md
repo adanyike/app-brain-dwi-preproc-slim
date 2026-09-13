@@ -2,6 +2,80 @@
 
 ## Unreleased
 
+### Brain-mask coverage (new)
+
+- Both brain masks are now measured against the image they were extracted from.
+  `bet` sometimes returns a mask with a bite out of it, or one that stops short
+  of the temporal lobes -- a dropout, a spike or a bias field moves the intensity
+  it thresholds on -- and nothing in the pipeline noticed: the run completed and
+  every output was shaped exactly like a good run's. It is not cosmetic. The
+  stage-1 mask is what `eddy --mask` is given, and eddy estimates its
+  Gaussian-process predictions and its outlier detection inside it, so a clipped
+  mask degrades the corrected data *everywhere*; the same mask bounds
+  `eddy_quad`'s voxel-wise metrics, so a bad mask partly hides itself from its own
+  QC report.
+- Two independent detectors have to be capable of seeing a defect, because each
+  is blind to what the other catches. **Mirror**: reflect the mask about its own
+  centroid along the left-right axis and ask where the other hemisphere has brain
+  and this side does not. **Hull band**: inside the *union* of the three
+  directional span fills and within a couple of voxels of the mask. The union
+  matters -- the *intersection* is the orthogonal convex hull, and a bite open to
+  the outside lies outside it, so an intersection test recovers almost nothing of
+  exactly the defect it was written for; there is a unit test asserting both
+  numbers. A third measurement, the per-slice area profile against a moving
+  median, catches the defect neither detector sees: a mask that ends at half its
+  widest slice rather than tapering.
+- Candidates are split into `missing_bright` and `missing_dark`, which demand
+  opposite responses. Bright is bet's fault and repairable; dark means the image
+  is empty there too -- a dropout -- which is reported as the data's problem and
+  never masked over, since eddy's outlier replacement is what addresses it. The
+  repair refuses to add a voxel that has no signal in it, at any step.
+- Bright voxels *just outside* the mask are deliberately **not** a criterion,
+  though they are recorded. On a b=0 EPI the scalp, orbital fat and skull marrow
+  are all bright, so "the boundary runs through tissue" fires on every subject;
+  the same reasoning is why the mirror deficit is intersected with the span-fill
+  union and thinned, so reflecting a curved surface about a rounded centroid
+  cannot accumulate a one-voxel skin into a percentage.
+- Three verdicts, not two. `implausible` -- a mask covering a few percent of the
+  field of view, a volume outside the range a brain can be, or a centre far from
+  the centre of the signal (bet landing on the neck) -- is **never** repaired:
+  growing it would make it a bigger wrong mask and silence the only symptom there
+  is. The absolute volume range is applied only when the field of view is itself
+  head-sized, so it cannot fail a phantom or a test fixture for the wrong reason.
+- The repair is strictly additive, local, and capped: union with a second `bet` at
+  a threshold *derived* from the stage's own (so a user who already lowered it
+  does not get a silent no-op), confined to the neighbourhood of the defect so the
+  rest of the mask stays exactly as bet made it, enclosed holes filled, intensity
+  growth off by default and bounded above by the in-mask 99.5th percentile so it
+  cannot walk into the skull. Above the cap the whole repair is discarded and the
+  mask is reported instead. The caps differ by stage because the trade-off does:
+  for eddy, losing brain is the expensive error; for the published `neuro/mask`,
+  an over-inclusive mask contaminates every ROI mean.
+- A repaired stage-1 mask changes eddy's results, so the log warns, the task page
+  says so in those terms, and `product.json` carries the before/after voxel
+  counts in provenance. Nothing here can fail a run: a coverage check that fails
+  runs is a coverage check people turn off.
+- `qc/` gains `mask_qc_<label>.json`, `mask_overlay_<label>.png` and
+  **`eddy_mask.nii.gz` -- the mask eddy actually used**, which was never
+  published before, leaving "was the mask the problem?" unanswerable from the
+  outputs after the fact. The overlay is drawn by a ~25-line `zlib`/`struct` PNG
+  writer rather than through FSL's bundled matplotlib: the system interpreter has
+  no matplotlib, and a path that no test can execute is a path that rots. The
+  tests decode the PNG and assert on its pixels.
+- New config: `mask_check`, `mask_repair` (`auto`/`always`/`never`),
+  `mask_repair_f`, `mask_warn_fraction`, `mask_repair_cap`,
+  `mask_repair_cap_final`, `mask_repair_grow`, `mask_figure`. `always` exists so a
+  study can be processed identically rather than per-subject; mask repair is not
+  part of the eddy cohort signature, because `eddy_squad` compares eddy's
+  parameters and not masks, and adding it would split cohorts SQUAD would happily
+  pool.
+- The stub `bet` now honours `-f`, without which the repair was untestable (it
+  unions with a second bet at a lower threshold, a no-op against a stub that
+  ignores it), and `STUB_BET_DROP` makes it produce the bitten mask this whole
+  mechanism exists for. `make_test_data.py --dropout` zeroes a chunk of the
+  forward series for the same reason on real binaries.
+
+
 ### Group quality control (eddy SQUAD)
 
 - A second brainlife App, sharing this repository and container: `run_squad.sh`

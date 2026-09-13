@@ -45,6 +45,15 @@ Three details worth knowing, because they are derived rather than assumed:
   results are very close to identical — and the resolved config is recorded in
   `product.json`.
 
+* **The brain mask is checked against the image, not trusted.** `bet` sometimes
+  returns a mask with a bite out of it or one that stops short of the temporal
+  lobes, and nothing downstream notices: the run completes and every output is
+  shaped exactly like a good one's. Both masks are measured against the image
+  they were extracted from, a mask that is missing brain is repaired
+  additively and within a cap, and the verdict, the numbers and a PNG overlay
+  are published either way. See
+  [Brain mask coverage](#brain-mask-coverage) below.
+
 Because of that last point, every acquired slice is kept whatever the slice
 count. There is no reason to crop or duplicate a slice to make the count even:
 [FSL withdrew that advice](https://fsl.fmrib.ox.ac.uk/fsl/docs/diffusion/topup/users_guide/index.html)
@@ -98,13 +107,79 @@ volume-to-volume only and records that in the summary.
 | `tensor` | `neuro/tensor` | Tensor, FA, MD, AD, RD, CL, CP, CS, colour FA, V1, S0 |
 | `roistats` | `raw` | Per-ROI statistics, tidy and wide CSV, plus JSON |
 | `reg` | `raw` | Atlas in native space and the ANTs transforms |
-| `qc` | `raw` | `eddy_quad` report, motion and outlier files, derived acquisition parameters |
+| `qc` | `raw` | `eddy_quad` report, motion and outlier files, derived acquisition parameters, brain-mask coverage reports and overlays, and the mask `eddy` used |
 | `eddyqc` | `raw` | `qc.json`, `qc.pdf` and the cohort signature — the lean dataset the group QC App consumes |
 
 `roistats/roi_stats.csv` has one row per metric and ROI, carrying `subject`,
 `session` and `run_id` so results from many subjects can be concatenated
 directly. `roistats/<METRIC>_mean.csv` is the same data one row per subject,
 one column per ROI.
+
+## Brain mask coverage
+
+The mask matters more than it looks. The stage-1 mask is what `eddy --mask` is
+given, and `eddy` estimates its Gaussian-process predictions and its outlier
+detection inside it, so a mask with a bite out of it degrades the corrected data
+*everywhere*, not only near the defect — and because the same mask bounds
+`eddy_quad`'s voxel-wise metrics, a bad mask partly hides itself from its own QC
+report. The stage-3 mask is published as `neuro/mask` and bounds `dtifit` and
+every ROI average.
+
+So both are measured against the image they came from, and the verdict is one of
+three:
+
+| Verdict | Meaning | What happens |
+|---|---|---|
+| `ok` | nothing brain-bright is left outside the mask beyond `mask_warn_fraction` of its volume, and the mask tapers rather than ending abruptly | nothing |
+| `suspicious` | brain is missing: a chunk, or a mask that stops mid-brain | repaired, unless `mask_repair` says otherwise |
+| `implausible` | not a brain at all — a few percent of the field of view, a volume outside the range a brain can be, or a centre far from the centre of the signal (`bet` landing on the neck) | **never** repaired: growing it would hide the only symptom |
+
+Two detectors have to agree that something is missing, and they are chosen
+because each sees what the other cannot. One reflects the mask about its own
+centroid along the left-right axis: where the other hemisphere has brain and this
+side does not, something was removed. The other looks inside the union of the
+three directional span fills and within a couple of voxels of the mask. A third
+measurement, the per-slice area profile, catches the one defect neither sees — a
+mask that ends at half its widest slice instead of tapering. Missing voxels are
+then split in two, because they call for opposite responses: where there is
+signal the mask is at fault and can be repaired, and where the image is dark too
+the **data** is at fault — a dropout — which is reported and never masked over,
+since `eddy`'s outlier replacement, not a bigger mask, is what addresses it.
+
+The repair is deliberately dull: union with a second `bet` at a lower threshold,
+confined to the neighbourhood of the defect so the rest of the mask stays exactly
+as `bet` made it, plus enclosed holes, only where there is signal, never into a
+dropout, and never removing a voxel. If it would add more than the cap it is
+discarded whole and the mask is reported instead — a repair that large is not a
+repair. The cap differs by stage on purpose: losing brain is the expensive error
+for `eddy`, while an over-inclusive published mask contaminates every ROI mean,
+so stage 3's cap is the tighter one.
+
+A repaired stage-1 mask changes `eddy`'s output, so it is never quiet about it:
+the log warns, the task page says so in those terms, and `product.json` records
+the before and after voxel counts.
+
+Published in `qc/`: `mask_qc_eddy.json` and `mask_qc_final.json` (the full
+measurements), `mask_overlay_eddy.png` and `mask_overlay_final.png` (slices with
+the mask outline, what was found missing in yellow and anything the repair added
+in green), and `eddy_mask.nii.gz` — the mask `eddy` actually used, which the App
+did not publish before and without which "was the mask the problem?" cannot be
+answered after the fact.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `mask_check` | `true` | Measure both masks against the image |
+| `mask_repair` | `auto` | `auto` repairs only a mask the check flags; `always` repairs every subject's, so a study is processed identically; `never` reports and changes nothing |
+| `mask_repair_f` | `auto` | The `bet` threshold for the permissive estimate. `auto` is the stage's own `f` minus 0.2 |
+| `mask_warn_fraction` | `0.01` | How much brain-bright signal outside the mask, as a fraction of its volume, counts as missing brain |
+| `mask_repair_cap` / `mask_repair_cap_final` | `0.25` / `0.1` | Discard the repair if it would add more than this fraction of the mask |
+| `mask_repair_grow` | `0` | Extra intensity-growth iterations on the stage-1 mask. Off by default; bounded above by the in-mask 99.5th percentile so it cannot walk into the skull |
+| `mask_figure` | `true` | Write the overlay PNGs |
+
+A note for group analysis: mask repair is a per-subject difference that
+`eddy_squad` cannot see — it compares eddy's parameters, not masks — so it never
+splits a cohort. A study that wants strict comparability should set `mask_repair`
+to `always` or `never` explicitly rather than leaving subjects to differ.
 
 ## Group quality control (eddy SQUAD)
 
@@ -239,6 +314,7 @@ Every parameter is optional.
 | `template_fa` / `atlas` | FSL's JHU data | Override the FA template and label image the atlas stage uses |
 | `atlas_labels` | `templates/JHU-ICBM-labels.json` | ROI names and abbreviations for the label image |
 | `roi_metrics` | `FA, MD, AD, RD` | Metrics to summarise per ROI |
+| `mask_check` / `mask_repair` | `true` / `auto` | Brain-mask coverage check and repair — see [Brain mask coverage](#brain-mask-coverage) |
 | `subject` / `session` | from input metadata | Labels written into the results |
 | `nthreads` | all cores | Threads for MRtrix3, ANTs and OpenMP |
 

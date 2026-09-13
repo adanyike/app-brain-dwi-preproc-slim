@@ -68,8 +68,9 @@ run "squad_inputs"    python3 test/test_squad_inputs.py -q
 run "make_group_product" python3 test/test_make_group_product.py -q
 if python3 -c 'import numpy, nibabel' 2>/dev/null; then
     run "roi_stats"   python3 test/test_roi_stats.py -q
+    run "mask_qc"     python3 test/test_mask_qc.py -q
 else
-    printf '\n=== roi_stats ===\n  skipped (numpy/nibabel not installed)\n'
+    printf '\n=== roi_stats / mask_qc ===\n  skipped (numpy/nibabel not installed)\n'
 fi
 
 # ------------------------------------------ dry run against stub binaries ----

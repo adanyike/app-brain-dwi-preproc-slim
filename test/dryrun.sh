@@ -449,6 +449,135 @@ check "it stops before eddy ran" bash -c '
     [ ! -e "'"$SCEN"'/work/eddy/eddy_corrected.eddy_command_txt" ]'
 
 # ---------------------------------------------------------------------------
+# Brain-mask coverage. The stub's bet honours -f and, with STUB_BET_DROP set,
+# takes a bite out of the mask at the *original* threshold only -- which is the
+# asymmetry the repair depends on: the more permissive run still finds the brain.
+#
+# Atlas registration is off in these scenarios; nothing here depends on it and
+# the dry run is long enough already.
+mask_scenario() {  # mask_scenario <name> <extra jq object> [env assignments...]
+    local name="$1" overrides="$2"; shift 2
+    SCEN="$ROOT/$name"
+    mkdir -p "$SCEN"
+    python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
+    base_config "$SCEN/input" "$overrides" > "$SCEN/config.json"
+    printf '\n--- %s ---\n' "$name"
+    ( cd "$SCEN" && env "$@" PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
+        > "$SCEN/log.txt" 2>&1
+    SCEN_STATUS=$?
+    check "pipeline exits 0" test "$SCEN_STATUS" -eq 0
+    [ "$SCEN_STATUS" -eq 0 ] || tail -20 "$SCEN/log.txt"
+}
+# mask_field <label> <jq filter> -- one field out of a published coverage report.
+mask_field() { jq -r "$2" "$SCEN/output/qc/mask_qc_$1.json" 2>/dev/null; }
+
+mask_scenario "17-mask-ok" '{"eddy_binary":"eddy_openmp","atlas_registration":false}'
+check "both masks were checked" bash -c '
+    [ -s "$1/output/qc/mask_qc_eddy.json" ] && [ -s "$1/output/qc/mask_qc_final.json" ]' \
+    _ "$SCEN"
+check "a clean eddy mask is ok"  test "$(mask_field eddy .verdict)" = ok
+check "a clean final mask is ok" test "$(mask_field final .verdict)" = ok
+check "nothing was repaired" test "$(mask_field eddy '.repair // "none"')" = none
+check "the mask eddy used is published" test -s "$SCEN/output/qc/eddy_mask.nii.gz"
+check "an overlay was rendered per mask" bash -c '
+    [ -s "$1/output/qc/mask_overlay_eddy.png" ] &&
+    [ -s "$1/output/qc/mask_overlay_final.png" ]' _ "$SCEN"
+check "the overlay really is a PNG" bash -c '
+    [ "$(head -c 8 "$1/output/qc/mask_overlay_eddy.png" | cut -c2-4)" = PNG ]' _ "$SCEN"
+check "the task page reports the coverage" bash -c '
+    jq -r ".brainlife[].msg // empty" "$1/product.json" |
+    grep -q "Brain mask (eddy) covers the brain"' _ "$SCEN"
+check "and carries the coverage figure" bash -c '
+    [ "$(jq -r "[.brainlife[] | select(.name==\"Brain mask coverage\")] | length" \
+         "$1/product.json")" = 1 ]' _ "$SCEN"
+check "no mask warning on clean data" bash -c '
+    ! jq -r ".brainlife[] | select(.type==\"warning\") | .msg" "$1/product.json" |
+      grep -q "Brain mask"' _ "$SCEN"
+check "provenance records both masks" bash -c '
+    [ "$(jq -r ".provenance.brain_mask | keys | join(\",\")" "$1/product.json")" \
+      = "eddy,final" ]' _ "$SCEN"
+
+# --- a bite out of the mask is found, localised and repaired ---
+mask_scenario "17b-mask-bitten" '{"eddy_binary":"eddy_openmp","atlas_registration":false}' \
+    STUB_BET_DROP=1
+check "the bitten mask is suspicious" test "$(mask_field eddy .verdict)" = suspicious
+check "the reason is localised to a block" \
+    bash -c 'printf "%s" "$1" | grep -q "block is"' _ "$(mask_field eddy '.reasons | join(" ")')"
+check "both detectors fired" \
+    test "$(mask_field eddy '.missing.by_criterion.mirror > 0 and .missing.by_criterion.hull_band > 0')" = true
+check "the eddy mask was repaired" test "$(mask_field eddy .repair.applied)" = true
+check "the repair was confined to the defect" test "$(mask_field eddy .repair.confined)" = true
+check "it added voxels and removed none" \
+    test "$(mask_field eddy '.repair.voxels_after > .repair.voxels_before')" = true
+check "the repaired mask passes its own check" test "$(mask_field eddy .after.verdict)" = ok
+check "the task page says the results changed" bash -c '
+    jq -r ".brainlife[] | select(.type==\"warning\") | .msg" "$1/product.json" |
+    grep -q "was repaired"' _ "$SCEN"
+check "and names eddy as the mask that matters" bash -c '
+    jq -r ".brainlife[] | select(.type==\"warning\") | .msg" "$1/product.json" |
+    grep -q "eddy was given"' _ "$SCEN"
+check "the published mask is checked too" test "$(mask_field final .verdict)" = suspicious
+check "the stage-3 cap is the tighter one" \
+    bash -c '[ "$1" != "$2" ] && [ "$1" = 0.1 ]' _ \
+    "$(mask_field final .repair.cap)" "$(mask_field eddy .repair.cap)"
+check "the coverage figure shows where it was missing" bash -c '
+    [ "$(jq -r "[.brainlife[] | select(.name==\"Brain mask coverage\") |
+                 .data[] | select(.name==\"eddy missing\")] | length" \
+         "$1/product.json")" = 1 ]' _ "$SCEN"
+
+# --- mask_repair: never reports and changes nothing ---
+mask_scenario "17c-mask-repair-never" \
+    '{"eddy_binary":"eddy_openmp","atlas_registration":false,"mask_repair":"never"}' \
+    STUB_BET_DROP=1
+check "the defect is still reported" test "$(mask_field eddy .verdict)" = suspicious
+check "but nothing was repaired" test "$(mask_field eddy '.repair // "none"')" = none
+check "the log says why" grep -q "mask_repair=never" "$SCEN/log.txt"
+check "the task page still warns" bash -c '
+    jq -r ".brainlife[] | select(.type==\"warning\") | .msg" "$1/product.json" |
+    grep -q "missing brain"' _ "$SCEN"
+
+# --- mask_repair: always, so every subject in a study is treated identically ---
+mask_scenario "17d-mask-repair-always" \
+    '{"eddy_binary":"eddy_openmp","atlas_registration":false,"mask_repair":"always"}'
+check "a clean mask is still ok" test "$(mask_field eddy .verdict)" = ok
+check "the repair ran anyway" test "$(mask_field eddy 'has("repair")')" = true
+check "and was not confined to a defect there is none of" \
+    test "$(mask_field eddy .repair.confined)" = false
+
+# --- mask_check: false adds nothing at all ---
+mask_scenario "17e-mask-check-off" \
+    '{"eddy_binary":"eddy_openmp","atlas_registration":false,"mask_check":false}'
+check "no coverage report is published" bash -c '
+    [ -z "$(ls "$1"/output/qc/mask_qc_*.json 2>/dev/null)" ]' _ "$SCEN"
+check "no overlay either" bash -c '
+    [ -z "$(ls "$1"/output/qc/mask_overlay_*.png 2>/dev/null)" ]' _ "$SCEN"
+check "the log says it is disabled" grep -q "coverage check disabled" "$SCEN/log.txt"
+check "and the task page carries no mask figure" bash -c '
+    ! jq -r ".brainlife[].name // empty" "$1/product.json" |
+      grep -q "Brain mask coverage"' _ "$SCEN"
+
+# --- a mask that is not a brain at all is reported, never grown ---
+# Driven through the helper directly: no bet threshold turns the phantom into
+# this, and the behaviour under test is the refusal, not the detection.
+printf '\n--- 17f-implausible-mask ---\n'
+SCEN="$ROOT/17f-implausible"
+mkdir -p "$SCEN/maskqc" "$SCEN/work"
+python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
+python3 "$HERE/corner_mask.py" "$SCEN"
+( cd "$SCEN" && printf '{}\n' > config.json &&
+  PATH="$BIN:$PATH" APP_DIR="$APP" WORK_DIR="$SCEN/work" bash -c '
+    source "$APP_DIR/src/common.sh"
+    check_brain_mask eddy "$1/meanb0.nii.gz" "$1/mask.nii.gz" 0.4 "$1/maskqc" 0.25 0' \
+    _ "$SCEN" ) > "$SCEN/log.txt" 2>&1
+check "the check survives a mask that is not a brain" test $? -eq 0
+check "it is called implausible, not suspicious" bash -c '
+    [ "$(jq -r .verdict "$1/maskqc/mask_qc_eddy.json")" = implausible ]' _ "$SCEN"
+check "it was not repaired" bash -c '
+    [ "$(jq -r ".repair // \"none\"" "$1/maskqc/mask_qc_eddy.json")" = none ]' _ "$SCEN"
+check "and the log says why" \
+    grep -q "implausible rather than merely tight" "$SCEN/log.txt"
+
+# ---------------------------------------------------------------------------
 printf '\n--- resume from a later stage ---\n'
 SCEN="$ROOT/1-cpu-appa"
 ( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run.sh" --from 4 ) \

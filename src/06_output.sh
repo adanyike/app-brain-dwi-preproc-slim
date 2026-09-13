@@ -6,7 +6,8 @@
 #   output/tensor/         neuro/tensor  tensor + FA/MD/AD/RD/CL/CP/CS
 #   output/roistats/       raw           per-ROI tables
 #   output/reg/            raw           template-to-native transforms
-#   output/qc/             raw           eddy_quad report and eddy logs
+#   output/qc/             raw           eddy_quad report, eddy logs, the mask
+#                                        coverage reports and overlays
 #   output/eddyqc/         raw           just qc.json, qc.pdf and the cohort
 #                                        signature -- the lean dataset a group
 #                                        SQUAD run consumes, N subjects at once
@@ -27,6 +28,7 @@ REG_WARPED_TEMPLATE="${REG_WARPED_TEMPLATE:-}"
 ROI_STATS_DIR="${ROI_STATS_DIR:-}"
 SHELL_REPORT="${SHELL_REPORT:-}"
 EDDY_QC_DIR="${EDDY_QC_DIR:-}"
+MASK_QC_DIR="${MASK_QC_DIR:-}"
 SLSPEC="${SLSPEC:-}"
 SUBJECT="${SUBJECT:-}"
 SESSION="${SESSION:-}"
@@ -99,6 +101,22 @@ cp "$WORK_DIR/prep/acqparams.txt"  "$OUT_DIR/qc/acqparams.txt"  2>/dev/null || t
 cp "$WORK_DIR/prep/index.txt"      "$OUT_DIR/qc/index.txt"      2>/dev/null || true
 [ -n "$SLSPEC" ] && cp "$SLSPEC" "$OUT_DIR/qc/slspec.txt" || true
 cp "$MEAN_B0"                      "$OUT_DIR/qc/meanb0.nii.gz"  2>/dev/null || true
+
+# The mask eddy was actually given has never been published before, which made
+# "was the mask the problem?" unanswerable after the fact from the outputs alone.
+cp "$BRAIN_MASK" "$OUT_DIR/qc/eddy_mask.nii.gz" 2>/dev/null || true
+MASK_QC_ARGS=()
+if [ -n "$MASK_QC_DIR" ] && [ -d "$MASK_QC_DIR" ]; then
+    for report in "$MASK_QC_DIR"/mask_qc_*.json; do
+        [ -f "$report" ] || continue
+        cp "$report" "$OUT_DIR/qc/"
+        label="$(basename "$report" .json)"; label="${label#mask_qc_}"
+        MASK_QC_ARGS+=(--mask-qc "$label=$report")
+    done
+    for overlay in "$MASK_QC_DIR"/mask_overlay_*.png; do
+        [ -f "$overlay" ] && cp "$overlay" "$OUT_DIR/qc/" || true
+    done
+fi
 for suffix in eddy_movement_rms eddy_restricted_movement_rms eddy_outlier_report \
               eddy_outlier_map eddy_parameters eddy_post_eddy_shell_alignment_parameters; do
     [ -f "${EDDY_OUT}.${suffix}" ] && cp "${EDDY_OUT}.${suffix}" "$OUT_DIR/qc/" || true
@@ -132,6 +150,7 @@ PRODUCT_ARGS=(--prep "$WORK_DIR/prep/prep.json")
 [ -n "$ROI_STATS_DIR" ] && PRODUCT_ARGS+=(--roi-stats "$ROI_STATS_DIR/roi_stats.json") || true
 [ -n "$SHELL_REPORT" ] && [ -f "$SHELL_REPORT" ] && PRODUCT_ARGS+=(--shells "$SHELL_REPORT") || true
 [ -n "$SQUAD_READY" ] && [ -f "$SQUAD_READY" ] && PRODUCT_ARGS+=(--eddy-qc "$SQUAD_READY") || true
+[ "${#MASK_QC_ARGS[@]}" -gt 0 ] && PRODUCT_ARGS+=("${MASK_QC_ARGS[@]}") || true
 python3 "$APP_DIR/python/make_product.py" \
     "${PRODUCT_ARGS[@]}" \
     --eddy-movement-rms "${EDDY_OUT}.eddy_movement_rms" \

@@ -241,6 +241,110 @@ gpu_present() {
     have nvidia-smi && nvidia-smi -L >/dev/null 2>&1
 }
 
+# check_brain_mask <label> <image> <mask> <bet f> <outdir> [cap] [grow iters]
+#
+# Measure whether a bet mask actually covers the brain, repair it when it does
+# not, and publish the evidence either way.  The mask is repaired **in place**,
+# because the whole point is that the stage that follows uses the repaired one:
+# the stage-1 mask is what eddy is given, and a clipped mask there biases the
+# Gaussian-process predictions everywhere, not only near the defect.
+#
+# Deliberately never fatal.  A coverage check that can fail a run is a coverage
+# check someone turns off; one that warns loudly and publishes a montage is one
+# they read.  The single exception is a malformed config value, which is a
+# mistake to fix rather than a finding to report.
+#
+# The caps differ by stage and the difference is the point: the stage-1 mask
+# feeds eddy, where losing brain is the expensive error, so it may grow further;
+# the stage-3 mask is published as neuro/mask and bounds every ROI average, so
+# an over-inclusive one contaminates the results and its cap is tighter.
+check_brain_mask() {
+    local label="$1" image="$2" mask="$3" bet_f="$4" outdir="$5"
+    local cap="${6:-0.25}" grow="${7:-0}"
+
+    if ! is_true "$(cfg_bool mask_check true)"; then
+        log "brain-mask coverage check disabled (mask_check=false)"
+        return 0
+    fi
+    [ -f "$image" ] && [ -f "$mask" ] || { warn "no $label mask to check"; return 0; }
+
+    local policy warn_fraction report verdict
+    policy="$(lower "$(cfg mask_repair auto)")"
+    case "$policy" in
+        auto|always|never) ;;
+        *) die "config key 'mask_repair' should be auto, always or never, got '$policy'" ;;
+    esac
+    warn_fraction="$(cfg mask_warn_fraction 0.01)"
+    mkdir -p "$outdir"
+    report="$outdir/mask_qc_${label}.json"
+
+    # The check prints its verdict on stdout, the way shells.py prints the shell
+    # it resolved, so the branch below reads as the decision it is.
+    if ! verdict="$(python3 "$APP_DIR/python/mask_qc.py" check \
+            --image "$image" --mask "$mask" --label "$label" \
+            --warn-fraction "$warn_fraction" --out "$report")"; then
+        warn "the $label brain-mask check could not be run; the mask is unchanged"
+        return 0
+    fi
+    log "$label brain mask: $verdict ($(jq -r '.volume_ml' "$report") ml)"
+
+    local repair=false confine=local
+    case "$policy:$verdict" in
+        never:*)
+            [ "$verdict" = ok ] || warn "the $label brain mask looks $verdict but mask_repair=never" ;;
+        *:implausible)
+            # Growing a mask that landed on the neck makes it a bigger wrong
+            # mask and silences the only symptom there is.
+            warn "the $label brain mask is implausible rather than merely tight, so it was NOT repaired -- see $report" ;;
+        always:*) repair=true; confine=none ;;
+        auto:suspicious) repair=true ;;
+    esac
+
+    if is_true "$repair"; then
+        local permissive_f
+        permissive_f="$(cfg mask_repair_f auto)"
+        if [ "$(lower "$permissive_f")" = auto ]; then
+            # Derived, not hardcoded: a user who already lowered bet's threshold
+            # would otherwise get a second run at the same f and a silent no-op.
+            permissive_f="$(python3 -c 'import sys; print("%.3f" % max(0.02, float(sys.argv[1]) - 0.2))' "$bet_f")"
+        fi
+        log "repairing the $label brain mask (bet -f $permissive_f for the permissive estimate)"
+        cp "$mask" "$outdir/${label}_before_repair.nii.gz"
+        bet "$image" "$outdir/${label}_permissive" -m -n -f "$permissive_f"
+        if python3 "$APP_DIR/python/mask_qc.py" repair \
+                --image "$image" --mask "$mask" \
+                --permissive "$outdir/${label}_permissive_mask.nii.gz" \
+                --out-mask "$mask" --report "$report" \
+                --grow "$grow" --cap "$cap" --confine "$confine" \
+                --warn-fraction "$warn_fraction" >/dev/null; then
+            if [ "$(jq -r '.repair.applied' "$report")" = true ]; then
+                warn "the $label brain mask was repaired: $(jq -r '.repair.added_voxels' "$report") voxels added ($(jq -r '.repair.added_fraction * 100 | floor' "$report")% of it). Anything computed with this mask differs from an unrepaired run."
+            else
+                warn "the $label brain mask was left as bet made it: $(jq -r '.repair.reason // "nothing to add"' "$report")"
+            fi
+        else
+            warn "repairing the $label brain mask failed; the original is unchanged"
+        fi
+    fi
+
+    if is_true "$(cfg_bool mask_figure true)"; then
+        local figure_args=(--image "$image" --mask "$mask")
+        # Draw the outline of what bet produced and colour what the repair added,
+        # so the picture answers "what changed" as well as "does it cover".
+        if [ -f "$outdir/${label}_before_repair.nii.gz" ] && \
+           [ "$(jq -r '.repair.applied // false' "$report")" = true ]; then
+            figure_args=(--image "$image" --mask "$outdir/${label}_before_repair.nii.gz" --added "$mask")
+        fi
+        python3 "$APP_DIR/python/mask_qc.py" figure "${figure_args[@]}" \
+            --out "$outdir/mask_overlay_${label}.png" >/dev/null \
+            || warn "could not render the $label mask overlay"
+    fi
+
+    jq -r '(.reasons // [])[] | "  " + .' "$report" >&2 || true
+    jq -r '(.notes // [])[] | "  note: " + .' "$report" >&2 || true
+    return 0
+}
+
 # bias_correct <in> <out> <bvecs> <bvals> <mask> <algorithm>
 #
 # MRtrix3 takes the algorithm as a positional argument: `dwibiascorrect ants ...`.

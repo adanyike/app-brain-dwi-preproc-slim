@@ -163,9 +163,32 @@ def cmd_bet(argv):
     data = np.asanyarray(img.dataobj).astype(np.float64)
     if data.ndim == 4:
         data = data.mean(axis=3)
-    # Threshold at a fraction of the robust maximum -- crude, but it yields a
-    # connected central blob for the phantom, which is all the pipeline needs.
-    mask = (data > 0.25 * np.percentile(data, 98)).astype(np.uint8)
+
+    # -f matters: the real bet's fractional threshold trades coverage for
+    # tightness, and the mask repair depends on that -- it unions the mask with a
+    # second bet at a lower f, which is a no-op against a stub that ignores it.
+    fraction = 0.4
+    if "-f" in argv:
+        fraction = float(argv[argv.index("-f") + 1])
+    mask = data > (0.1 + 0.5 * fraction) * np.percentile(data, 98)
+
+    # STUB_BET_DROP reproduces the failure this app now checks for: a bite out of
+    # one side of the mask, of the kind a signal dropout or a spike produces.
+    # Applied only at the *original* threshold, so that the more permissive run
+    # the repair makes still finds the brain -- which is exactly the asymmetry
+    # that makes the repair work on real data.
+    if os.environ.get("STUB_BET_DROP") and fraction > 0.25:
+        where = np.nonzero(mask)
+        if len(where[0]):
+            low = [int(axis.min()) for axis in where]
+            high = [int(axis.max()) for axis in where]
+            mid = [(low[i] + high[i]) // 2 for i in range(3)]
+            size = [max(2, (high[i] - low[i]) // 4) for i in range(3)]
+            mask[low[0]:low[0] + size[0] + 1,
+                 mid[1] - size[1]:mid[1] + size[1] + 1,
+                 mid[2] - size[2]:mid[2] + size[2] + 1] = False
+
+    mask = mask.astype(np.uint8)
     if "-m" in argv or "-n" in argv:
         save(base + "_mask.nii.gz", mask, img, dtype=np.uint8)
     if "-n" not in argv:

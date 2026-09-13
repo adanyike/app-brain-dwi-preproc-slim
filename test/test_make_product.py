@@ -27,6 +27,29 @@ ROI = {
 }
 
 
+MASK_OK = {
+    "label": "eddy", "verdict": "ok", "volume_ml": 1402.0, "n_voxels": 175250,
+    "missing": {"bright_fraction": 0.001, "bright_voxels": 175},
+    "reasons": [], "notes": [], "dropout": False,
+    "slice_profile": {"axis": 2, "mask_area": [0, 10, 40, 38, 8],
+                      "missing_area": [0, 0, 0, 0, 0],
+                      "tissue_area": [2, 14, 44, 42, 10]},
+}
+MASK_REPAIRED = {
+    "label": "eddy", "verdict": "suspicious", "volume_ml": 1302.0, "n_voxels": 162750,
+    "missing": {"bright_fraction": 0.032, "bright_voxels": 5208},
+    "reasons": ["3.2% of the mask volume again is brain-bright signal just outside it"],
+    "worst_block": {"fraction": 0.64, "centre_mm": [-44.0, -18.0, 12.0]},
+    "notes": [], "dropout": False,
+    "repair": {"applied": True, "added_voxels": 4100, "added_fraction": 0.025,
+               "steps": [{"step": "union with a permissive bet, where there is signal",
+                          "added_voxels": 4100}]},
+    "slice_profile": {"axis": 2, "mask_area": [0, 10, 30, 38, 8],
+                      "missing_area": [0, 0, 12, 0, 0],
+                      "tissue_area": [2, 14, 44, 42, 10]},
+}
+
+
 class TestMakeProduct(unittest.TestCase):
     def _build(self, prep=None, roi=None, rms=None, **flags):
         tmp = tempfile.mkdtemp()
@@ -44,6 +67,11 @@ class TestMakeProduct(unittest.TestCase):
             with open(rms_path, "w") as fh:
                 fh.write("\n".join("%f %f" % (v, v / 2) for v in rms))
             argv += ["--eddy-movement-rms", rms_path]
+        for label, report in (flags.pop("mask_qc", {}) or {}).items():
+            path = os.path.join(tmp, "mask_qc_%s.json" % label)
+            with open(path, "w") as fh:
+                json.dump(report, fh)
+            argv += ["--mask-qc", "%s=%s" % (label, path)]
         for key, value in flags.items():
             argv += ["--" + key.replace("_", "-"), str(value)]
         mp.main(argv)
@@ -98,6 +126,78 @@ class TestMakeProduct(unittest.TestCase):
             len([e for e in without["brainlife"] if e.get("type") == "plotly"]), 1)
         self.assertEqual(
             len([e for e in with_rms["brainlife"] if e.get("type") == "plotly"]), 2)
+
+    def test_a_good_mask_is_reported_without_a_warning(self):
+        product = self._build(roi=ROI, topup_applied="true", slice_to_volume="true",
+                              mask_qc={"eddy": MASK_OK})
+        messages = [e["msg"] for e in product["brainlife"] if "msg" in e]
+        warnings = [e["msg"] for e in product["brainlife"] if e.get("type") == "warning"]
+        self.assertTrue(any("Brain mask (eddy) covers the brain" in m for m in messages))
+        self.assertEqual(warnings, [])
+        self.assertEqual(product["provenance"]["brain_mask"]["eddy"]["verdict"], "ok")
+
+    def test_a_repaired_mask_is_reported_as_a_change_in_results(self):
+        product = self._build(roi=ROI, topup_applied="true", slice_to_volume="true",
+                              mask_qc={"eddy": MASK_REPAIRED})
+        warnings = [e["msg"] for e in product["brainlife"] if e.get("type") == "warning"]
+        self.assertTrue(any("missing brain" in m for m in warnings))
+        self.assertTrue(any("was repaired" in m and "eddy was given" in m
+                            for m in warnings))
+        self.assertTrue(
+            product["provenance"]["brain_mask"]["eddy"]["repair"]["applied"])
+
+    def test_a_mask_left_alone_at_the_cap_says_why(self):
+        report = dict(MASK_REPAIRED,
+                      repair={"applied": False, "reason": "above the 10% cap",
+                              "steps": []})
+        product = self._build(roi=ROI, topup_applied="true", slice_to_volume="true",
+                              mask_qc={"final": report})
+        warnings = [e["msg"] for e in product["brainlife"] if e.get("type") == "warning"]
+        self.assertTrue(any("left as bet made it" in m and "cap" in m
+                            for m in warnings))
+
+    def test_an_implausible_mask_says_it_was_not_repaired(self):
+        report = dict(MASK_OK, verdict="implausible",
+                      reasons=["the mask is 90 ml, below the 250 ml a brain can be"])
+        product = self._build(roi=ROI, topup_applied="true", slice_to_volume="true",
+                              mask_qc={"eddy": report})
+        warnings = [e["msg"] for e in product["brainlife"] if e.get("type") == "warning"]
+        self.assertTrue(any("is not a brain" in m and "NOT repaired" in m
+                            for m in warnings))
+
+    def test_a_dropout_is_reported_as_the_data_not_the_mask(self):
+        report = dict(MASK_OK, dropout=True,
+                      notes=["3.0% of the mask volume again is *dark* just outside it"])
+        product = self._build(roi=ROI, topup_applied="true", slice_to_volume="true",
+                              mask_qc={"eddy": report})
+        warnings = [e["msg"] for e in product["brainlife"] if e.get("type") == "warning"]
+        self.assertTrue(any("dark just outside it" in m.replace("*", "")
+                            for m in warnings))
+
+    def test_the_coverage_figure_has_a_trace_per_mask(self):
+        product = self._build(roi=ROI, topup_applied="true", slice_to_volume="true",
+                              mask_qc={"eddy": MASK_REPAIRED, "final": MASK_OK})
+        figures = [e for e in product["brainlife"] if e.get("type") == "plotly"]
+        coverage = [f for f in figures if f["name"] == "Brain mask coverage"]
+        self.assertEqual(len(coverage), 1)
+        names = [trace["name"] for trace in coverage[0]["data"]]
+        self.assertIn("eddy mask", names)
+        self.assertIn("eddy missing", names)          # it has a missing profile
+        self.assertIn("final mask", names)
+        self.assertNotIn("final missing", names)      # and it does not
+
+    def test_a_malformed_mask_qc_argument_is_ignored_rather_than_fatal(self):
+        tmp = tempfile.mkdtemp()
+        prep_path = os.path.join(tmp, "prep.json")
+        with open(prep_path, "w") as fh:
+            json.dump(PREP, fh)
+        out = os.path.join(tmp, "product.json")
+        self.assertEqual(mp.main(["--prep", prep_path, "--out", out,
+                                  "--mask-qc", "no-equals-sign"]), 0)
+        with open(out) as fh:
+            product = json.load(fh)
+        self.assertTrue(product["brainlife"])
+        self.assertEqual(product["provenance"]["brain_mask"], {})
 
     def test_survives_without_roi_stats(self):
         product = self._build(topup_applied="true", slice_to_volume="true")

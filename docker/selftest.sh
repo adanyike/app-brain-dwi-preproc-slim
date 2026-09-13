@@ -15,6 +15,9 @@ set -uo pipefail
 FAILED=0
 CHECKED=0
 
+# This script lives in <app>/docker/, in the image and in a checkout alike.
+APP_ROOT="${APP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
 fail() { printf '  FAIL  %-28s %s\n' "$1" "$2" >&2; FAILED=$((FAILED + 1)); }
 pass() { printf '  ok    %s\n' "$1"; }
 
@@ -306,6 +309,53 @@ then
     fi
 else
     fail "round trip" "could not write a test NIfTI"
+fi
+
+# The brain-mask coverage check, end to end, under the *system* interpreter.
+#
+# It is the one part of the pipeline that does its own morphology and writes its
+# own PNG, so nothing else in this selftest would notice if the system python
+# lost numpy's ufunc machinery or zlib. A sphere with a bite taken out of it has
+# a known right answer, so this asserts the verdict rather than merely that the
+# script ran.
+echo "brain mask coverage"
+CHECKED=$((CHECKED + 1))
+MASK_QC="${APP_ROOT:-/opt/app}/python/mask_qc.py"
+if [ ! -f "$MASK_QC" ]; then
+    fail "mask_qc.py" "not found at $MASK_QC"
+elif python3 - "$TMP" <<'PY' >/dev/null 2>&1
+import sys
+import numpy as np
+import nibabel as nib
+out = sys.argv[1]
+n = 64                      # 128 mm at 2 mm: a head-sized field of view
+grid = [np.arange(n) - (n - 1) / 2.0] * 3
+ii, jj, kk = np.meshgrid(*grid, indexing="ij")
+distance = np.sqrt(ii ** 2 + jj ** 2 + kk ** 2)
+brain = distance < 22       # ~357 ml, inside the range a brain can be
+image = np.zeros((n, n, n), dtype=np.float32)
+image[brain] = 1000.0
+bite = np.sqrt((ii + 16) ** 2 + jj ** 2 + kk ** 2) < 8
+affine = np.diag([-2.0, 2.0, 2.0, 1.0])
+nib.save(nib.Nifti1Image(image, affine), out + "/mq_image.nii.gz")
+nib.save(nib.Nifti1Image((brain & ~bite).astype(np.uint8), affine),
+         out + "/mq_mask.nii.gz")
+PY
+then
+    MQ_VERDICT="$(python3 "$MASK_QC" check --image "$TMP/mq_image.nii.gz" \
+        --mask "$TMP/mq_mask.nii.gz" --out "$TMP/mq_report.json" 2>/dev/null)"
+    if [ "$MQ_VERDICT" != suspicious ]; then
+        fail "mask coverage check" "a bitten mask was called '${MQ_VERDICT:-nothing}'"
+    elif ! python3 "$MASK_QC" figure --image "$TMP/mq_image.nii.gz" \
+            --mask "$TMP/mq_mask.nii.gz" --out "$TMP/mq.png" >/dev/null 2>&1; then
+        fail "mask overlay" "the PNG writer failed"
+    elif [ "$(head -c 8 "$TMP/mq.png" | cut -c2-4)" != PNG ]; then
+        fail "mask overlay" "the overlay is not a PNG"
+    else
+        pass "brain-mask coverage check and overlay"
+    fi
+else
+    fail "mask coverage check" "could not write the test volumes"
 fi
 
 echo

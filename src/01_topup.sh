@@ -117,12 +117,22 @@ bet "$MEAN_B0" "$WORK_DIR/prep/topup" -m -n -f "$BET_F"
 fslmaths "$WORK_DIR/prep/topup_mask.nii.gz" -fillh "$WORK_DIR/prep/topup_mask_filled.nii.gz"
 mv "$WORK_DIR/prep/topup_mask_filled.nii.gz" "$BRAIN_MASK"
 
+# This is the mask eddy is about to be given, so this is where a bite out of it
+# is worth the most: eddy's Gaussian-process predictions and its outlier
+# detection are both estimated within the mask, so a clipped one degrades the
+# corrected data everywhere -- and it bounds eddy_quad's voxel-wise metrics too,
+# which is how a bad mask ends up flattering its own QC report.
+MASK_QC_DIR="$WORK_DIR/maskqc"
+check_brain_mask eddy "$MEAN_B0" "$BRAIN_MASK" "$BET_F" "$MASK_QC_DIR" \
+    "$(cfg mask_repair_cap 0.25)" "$(cfg mask_repair_grow 0)"
+
 cat >> "$WORK_DIR/state.sh" <<EOSTATE
 TOPUP_BASE="$TOPUP_BASE"
 TOPUP_APPLIED=$TOPUP_APPLIED
 TOPUP_CONFIG="$TOPUP_CONFIG"
 TOPUP_MEAN_B0="$MEAN_B0"
 BRAIN_MASK="$BRAIN_MASK"
+MASK_QC_DIR="$MASK_QC_DIR"
 EOSTATE
 
 timer_report "stage 1 (topup)"
