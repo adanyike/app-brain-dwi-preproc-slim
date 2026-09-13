@@ -107,7 +107,7 @@ volume-to-volume only and records that in the summary.
 | `tensor` | `neuro/tensor` | Tensor, FA, MD, AD, RD, CL, CP, CS, colour FA, V1, S0 |
 | `roistats` | `raw` | Per-ROI statistics, tidy and wide CSV, plus JSON |
 | `reg` | `raw` | Atlas in native space and the ANTs transforms |
-| `qc` | `raw` | `eddy_quad` report, motion and outlier files, derived acquisition parameters, brain-mask coverage reports and overlays, and the mask `eddy` used |
+| `qc` | `raw` | `eddy_quad` report, motion and outlier files, derived acquisition parameters, brain-mask coverage reports and overlays, and the mask `eddy` used with the image it was judged against |
 | `eddyqc` | `raw` | `qc.json`, `qc.pdf` and the cohort signature — the lean dataset the group QC App consumes |
 
 `roistats/roi_stats.csv` has one row per metric and ROI, carrying `subject`,
@@ -172,9 +172,11 @@ the before and after voxel counts.
 Published in `qc/`: `mask_qc_eddy.json` and `mask_qc_final.json` (the full
 measurements), `mask_overlay_eddy.png` and `mask_overlay_final.png` (slices with
 the mask outline, what was found missing in yellow and anything the repair added
-in green), and `eddy_mask.nii.gz` — the mask `eddy` actually used, which the App
-did not publish before and without which "was the mask the problem?" cannot be
-answered after the fact.
+in green), and `eddy_mask.nii.gz` with `eddy_meanb0.nii.gz` — the mask `eddy`
+actually used and the image it was judged against, neither of which the App
+published before. Without the pair, "was the mask the problem?" cannot be
+answered after the fact: `meanb0.nii.gz` is the *stage-3* mean b=0, not the one
+stage 1 masked.
 
 | Parameter | Default | Meaning |
 |---|---|---|

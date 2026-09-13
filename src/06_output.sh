@@ -104,7 +104,13 @@ cp "$MEAN_B0"                      "$OUT_DIR/qc/meanb0.nii.gz"  2>/dev/null || t
 
 # The mask eddy was actually given has never been published before, which made
 # "was the mask the problem?" unanswerable after the fact from the outputs alone.
+# Its image goes with it: meanb0.nii.gz above is the *stage-3* mean b=0 (state.sh
+# reassigns MEAN_B0 there), so without this the eddy mask cannot be re-checked
+# against the image it was judged on -- which is exactly what a later calibration
+# of the coverage thresholds needs.
 cp "$BRAIN_MASK" "$OUT_DIR/qc/eddy_mask.nii.gz" 2>/dev/null || true
+[ -n "${TOPUP_MEAN_B0:-}" ] && [ -f "$TOPUP_MEAN_B0" ] && \
+    cp "$TOPUP_MEAN_B0" "$OUT_DIR/qc/eddy_meanb0.nii.gz" || true
 MASK_QC_ARGS=()
 if [ -n "$MASK_QC_DIR" ] && [ -d "$MASK_QC_DIR" ]; then
     for report in "$MASK_QC_DIR"/mask_qc_*.json; do

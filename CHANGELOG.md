@@ -56,9 +56,13 @@
   counts in provenance. Nothing here can fail a run: a coverage check that fails
   runs is a coverage check people turn off.
 - `qc/` gains `mask_qc_<label>.json`, `mask_overlay_<label>.png` and
-  **`eddy_mask.nii.gz` -- the mask eddy actually used**, which was never
-  published before, leaving "was the mask the problem?" unanswerable from the
-  outputs after the fact. The overlay is drawn by a ~25-line `zlib`/`struct` PNG
+  **`eddy_mask.nii.gz` with `eddy_meanb0.nii.gz` -- the mask eddy actually used
+  and the image it was judged against**, neither published before, leaving "was
+  the mask the problem?" unanswerable from the outputs after the fact. Both
+  halves are needed: `meanb0.nii.gz` is the *stage-3* mean b=0, because state.sh
+  reassigns MEAN_B0 there, so the eddy mask could not be re-checked against the
+  image it was actually masked from. Found while re-checking two real subjects
+  against a recalibrated threshold, which is precisely the use case. The overlay is drawn by a ~25-line `zlib`/`struct` PNG
   writer rather than through FSL's bundled matplotlib: the system interpreter has
   no matplotlib, and a path that no test can execute is a path that rots. The
   tests decode the PNG and assert on its pixels.

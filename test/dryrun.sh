@@ -479,6 +479,14 @@ check "a clean eddy mask is ok"  test "$(mask_field eddy .verdict)" = ok
 check "a clean final mask is ok" test "$(mask_field final .verdict)" = ok
 check "nothing was repaired" test "$(mask_field eddy '.repair // "none"')" = none
 check "the mask eddy used is published" test -s "$SCEN/output/qc/eddy_mask.nii.gz"
+# And the image it was judged against: qc/meanb0.nii.gz is the stage-3 one, so
+# without this pair the eddy mask cannot be re-checked after the fact. Asserted
+# against state.sh rather than by comparing the two published images -- with stub
+# tools the stage-3 mean b=0 comes out identical, which proves nothing either way.
+check "so is the image it was judged against" test -s "$SCEN/output/qc/eddy_meanb0.nii.gz"
+check "and it is the stage-1 mean b=0 that bet ran on" bash -c '
+    source="$(sed -n "s/^TOPUP_MEAN_B0=\"\(.*\)\"$/\1/p" "$1/work/state.sh")"
+    [ -n "$source" ] && cmp -s "$source" "$1/output/qc/eddy_meanb0.nii.gz"' _ "$SCEN"
 check "an overlay was rendered per mask" bash -c '
     [ -s "$1/output/qc/mask_overlay_eddy.png" ] &&
     [ -s "$1/output/qc/mask_overlay_final.png" ]' _ "$SCEN"
