@@ -1,189 +1,11 @@
 # Changelog
 
-## Unreleased
-
-### Brain-mask coverage (new)
-
-- Both brain masks are now measured against the image they were extracted from.
-  `bet` sometimes returns a mask with a bite out of it, or one that stops short
-  of the temporal lobes -- a dropout, a spike or a bias field moves the intensity
-  it thresholds on -- and nothing in the pipeline noticed: the run completed and
-  every output was shaped exactly like a good run's. It is not cosmetic. The
-  stage-1 mask is what `eddy --mask` is given, and eddy estimates its
-  Gaussian-process predictions and its outlier detection inside it, so a clipped
-  mask degrades the corrected data *everywhere*; the same mask bounds
-  `eddy_quad`'s voxel-wise metrics, so a bad mask partly hides itself from its own
-  QC report.
-- Two independent detectors have to be capable of seeing a defect, because each
-  is blind to what the other catches. **Mirror**: reflect the mask about its own
-  centroid along the left-right axis and ask where the other hemisphere has brain
-  and this side does not. **Hull band**: inside the *union* of the three
-  directional span fills and within a couple of voxels of the mask. The union
-  matters -- the *intersection* is the orthogonal convex hull, and a bite open to
-  the outside lies outside it, so an intersection test recovers almost nothing of
-  exactly the defect it was written for; there is a unit test asserting both
-  numbers. A third measurement, the per-slice area profile against a moving
-  median, catches the defect neither detector sees: a mask that ends at half its
-  widest slice rather than tapering.
-- Candidates are split into `missing_bright` and `missing_dark`, which demand
-  opposite responses. Bright is bet's fault and repairable; dark means the image
-  is empty there too -- a dropout -- which is reported as the data's problem and
-  never masked over, since eddy's outlier replacement is what addresses it. The
-  repair refuses to add a voxel that has no signal in it, at any step.
-- Bright voxels *just outside* the mask are deliberately **not** a criterion,
-  though they are recorded. On a b=0 EPI the scalp, orbital fat and skull marrow
-  are all bright, so "the boundary runs through tissue" fires on every subject;
-  the same reasoning is why the mirror deficit is intersected with the span-fill
-  union and thinned, so reflecting a curved surface about a rounded centroid
-  cannot accumulate a one-voxel skin into a percentage.
-- Three verdicts, not two. `implausible` -- a mask covering a few percent of the
-  field of view, a volume outside the range a brain can be, or a centre far from
-  the centre of the signal (bet landing on the neck) -- is **never** repaired:
-  growing it would make it a bigger wrong mask and silence the only symptom there
-  is. The absolute volume range is applied only when the field of view is itself
-  head-sized, so it cannot fail a phantom or a test fixture for the wrong reason.
-- The repair is strictly additive, local, and capped: union with a second `bet` at
-  a threshold *derived* from the stage's own (so a user who already lowered it
-  does not get a silent no-op), confined to the neighbourhood of the defect so the
-  rest of the mask stays exactly as bet made it, enclosed holes filled, intensity
-  growth off by default and bounded above by the in-mask 99.5th percentile so it
-  cannot walk into the skull. Above the cap the whole repair is discarded and the
-  mask is reported instead. The caps differ by stage because the trade-off does:
-  for eddy, losing brain is the expensive error; for the published `neuro/mask`,
-  an over-inclusive mask contaminates every ROI mean.
-- A repaired stage-1 mask changes eddy's results, so the log warns, the task page
-  says so in those terms, and `product.json` carries the before/after voxel
-  counts in provenance. Nothing here can fail a run: a coverage check that fails
-  runs is a coverage check people turn off.
-- `qc/` gains `mask_qc_<label>.json`, `mask_overlay_<label>.png` and
-  **`eddy_mask.nii.gz` with `eddy_meanb0.nii.gz` -- the mask eddy actually used
-  and the image it was judged against**, neither published before, leaving "was
-  the mask the problem?" unanswerable from the outputs after the fact. Both
-  halves are needed: `meanb0.nii.gz` is the *stage-3* mean b=0, because state.sh
-  reassigns MEAN_B0 there, so the eddy mask could not be re-checked against the
-  image it was actually masked from. Found while re-checking two real subjects
-  against a recalibrated threshold, which is precisely the use case. The overlay is drawn by a ~25-line `zlib`/`struct` PNG
-  writer rather than through FSL's bundled matplotlib: the system interpreter has
-  no matplotlib, and a path that no test can execute is a path that rots. The
-  tests decode the PNG and assert on its pixels.
-- New config: `mask_check`, `mask_repair` (`auto`/`always`/`never`),
-  `mask_repair_f`, `mask_warn_fraction`, `mask_repair_cap`,
-  `mask_repair_cap_final`, `mask_repair_grow`, `mask_figure`. `always` exists so a
-  study can be processed identically rather than per-subject; mask repair is not
-  part of the eddy cohort signature, because `eddy_squad` compares eddy's
-  parameters and not masks, and adding it would split cohorts SQUAD would happily
-  pool.
-- **Calibrated against real data**, which moved three things. The first two
-  subjects ever put through the check (1.5 mm isotropic, 1.5 and 1.7 L masks)
-  both came back `suspicious`, and neither had anything wrong with it.
-  - The localisation guard counted mask **plus** missing voxels, so a block
-    holding *four* mask voxels and 31 missing passed it and reported "89%
-    missing" -- arithmetic at the periphery, not anatomy. The guard now counts
-    mask voxels alone.
-  - Nothing required a concentrated defect to be a meaningful size. Every worst
-    block on real data was 20-40 voxels (0.07-0.14 ml) at the temporal poles and
-    orbitofrontal cortex, where `bet -f 0.4` shaves off a voxel or two. A block
-    must now be `mask_min_defect_block` (35%) empty of its own capacity. That is
-    a *fraction of a block*, not a volume, deliberately: at 1.5 mm isotropic one
-    block holds 0.86 ml, so any millilitre floor would have been unreachable and
-    would have disabled the rule outright on exactly this data.
-    The companion "more than a quarter of what is in this block is missing" test
-    went with it -- mask and missing are disjoint within a block, so it was
-    implied by the new one and only made the threshold half-adjustable.
-  - `dropout` fired on every healthy subject: all four real masks sat at
-    1.99-2.21% dark just outside them, because the inner table of the skull and
-    the air around the head are dark and the hull band reaches them. The dropout
-    note now has its own threshold (5%) instead of borrowing `mask_warn_fraction`.
-  `mask_warn_fraction` itself was left alone: real masks measured 0.04-0.18%
-  against a 1% threshold, which is the headroom it was meant to have.
-- The repair's log line said "1396 voxels added (0% of it)" -- a percentage
-  floored to an integer, so every repair under 1% of the mask read as zero. It
-  now reports two decimals, and says what the mask reads *after* the repair, so a
-  repair that did not clear the verdict cannot look like one that did.
-- The stub `bet` now honours `-f`, without which the repair was untestable (it
-  unions with a second bet at a lower threshold, a no-op against a stub that
-  ignores it), and `STUB_BET_DROP` makes it produce the bitten mask this whole
-  mechanism exists for. `make_test_data.py --dropout` zeroes a chunk of the
-  forward series for the same reason on real binaries.
-
-
-### Group quality control (eddy SQUAD)
-
-- A second brainlife App, sharing this repository and container: `run_squad.sh`
-  runs FSL's `eddy_squad` over the eddy QC databases of a whole study, and
-  `main` routes a task to it when its config carries the group input (`eddyqc`,
-  `qc_folders`) or sets `mode: "group"`. The per-subject pipeline is unchanged.
-- Each subject now publishes `output/eddyqc/` — `qc.json`, `qc.pdf` and a
-  `squad_ready.json` carrying the subject label and a **cohort signature**. The
-  existing `qc/` bundle is untouched; the new one exists because a group task
-  stages every subject it is given, and staging hundreds of mean-b0 volumes to
-  read a 2 KB database is not worth doing.
-- The signature compares the eddy **input** data as well as the output flags,
-  exactly. Newer FSL releases check the acquisition too -- `Inconsistency
-  detected in eddy input data in topup acquisition parameters!` is what a real
-  study hit -- so a key looser than that comparison pools subjects SQUAD then
-  rejects, failing the whole study instead of splitting one cohort. Rounding is
-  gone with it: b-values of 1495 and 1500 are different cohorts, because they
-  are different to SQUAD. `signature_fields` narrows the comparison where an FSL
-  tolerates a difference, and a refusal this app did not predict is followed by
-  a field-by-field comparison of the staged subjects rather than a traceback.
-- The signature is what makes a group run predictable. `eddy_squad` pools
-  subjects only when `eddy` ran with the same features for all of them, and
-  raises `Eddy output inconsistency detected!` otherwise — which on brainlife is
-  easy to trip, because slice-to-volume correction depends on a GPU being
-  visible and the susceptibility field on the subject having a reverse
-  phase-encoded series. The signature records those six flags plus the shell
-  structure, so the group App buckets its inputs, reports on the largest cohort,
-  and names who it left out and why. Volume counts are deliberately left out of
-  the signature: SQUAD pools those correctly, and excluding them would discard
-  data for nothing.
-- The grouping variable is matched to subjects **by name** when given as a
-  `participants.tsv`-style table, because `eddy_squad` matches by line position
-  and a single excluded subject otherwise shifts every later value onto the
-  wrong person. A file already in SQUAD's format is passed through, and refused
-  when its value count does not match the cohort.
-- `--update` is supported: the QC databases are copied into the work directory
-  first, since brainlife stages inputs read-only and `eddy_squad -u` writes into
-  the folders it is given, and the rewritten reports are collected under each
-  subject's label. It needs two things the group report does not -- every
-  subject's own `qc.pdf`, and a PDF library in FSL's python to merge with -- so
-  both are checked first and the update alone is skipped when either is absent.
-  The dependency is checked by importing `eddy_qc.SQUAD.squad_update` itself
-  rather than by guessing the library's name, which has changed between
-  releases, and the Dockerfile installs `PyPDF2<3` into FSL's interpreter (not
-  the system one, which is not what eddy_squad runs under).
-- `product.json` for a group task reports the cohort, the exclusions and the
-  per-subject motion, outlier and SNR distributions, worst subject first.
-- A crash in `eddy_squad`'s update step no longer costs the group report. FSL
-  6.0.7.x fails there every time -- `squad_update` hands `ref_page` an empty
-  list where the eddy parameters belong -- and it fails *after* writing the
-  group database, so the study-wise report exists when the traceback appears.
-  The App detects that, re-runs without `--update`, and says so.
-- That upstream bug is now fixed in the image rather than merely survived, so
-  updating the single-subject reports works -- and it is **on by default**
-  (`update_single_subject_reports`, still settable to false). The build guards
-  `ref_page.py`'s `ec.MethodsText()` call with a `hasattr` check, applying the
-  edit only when the unguarded call is present, keeping the original beside it as
-  `ref_page.py.orig`, and importing the module afterwards so a mangled file fails
-  the build instead of someone's task. `docker/selftest.sh` reports which of the
-  three states the image is in. The fallback above stays, because an image built
-  elsewhere, or a future FSL that moves the call, must still publish its group
-  report.
-- Subjects processed before any of this existed need no reprocessing: a QUAD
-  folder is found under `eddyqc/`, an archived `qc` dataset, an older task's
-  `output/qc/eddy_quad/`, or eddy_quad's own `.qc/`, and a subject label is
-  taken from the first directory in the path that names something other than a
-  kind of output.
-- Subject and session labels are now settled once, in stage 0, and carried in
-  `state.sh`; stage 6 needs them for the QC dataset and stage 5 no longer
-  resolves them separately.
-- `docker/selftest.sh` checks `eddy_squad` and the seaborn import its study-wise
-  plots need, which `eddy_quad` never touches.
-
 ## 1.0.0
 
 First release: a containerised brainlife app for brain DWI preprocessing with
-reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction.
+reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction,
+together with a second App -- same repository, same image -- that runs FSL's
+study-wise eddy QC (SQUAD) across a whole cohort.
 
 ### The pipeline
 
@@ -248,6 +70,161 @@ reverse phase-encode distortion correction, DTI fitting and JHU ROI extraction.
   counts and dispersion, in both tidy and wide CSV layouts.
 - `eddy_quad` QC, motion plots and a `product.json` summary.
 - Tool versions: FSL 6.0.7.23, MRtrix3 3.0.8, ANTs 2.6.5.
+
+### Brain-mask coverage
+
+- Both brain masks are measured against the image they were extracted from.
+  `bet` sometimes returns a mask with a bite out of it, or one that stops short
+  of the temporal lobes -- a dropout, a spike or a bias field moves the intensity
+  it thresholds on -- and without a check nothing in the pipeline would notice:
+  the run completes and every output is shaped exactly like a good run's. It is
+  not cosmetic. The stage-1 mask is what `eddy --mask` is given, and eddy
+  estimates its Gaussian-process predictions and its outlier detection inside it,
+  so a clipped mask degrades the corrected data *everywhere*; the same mask
+  bounds `eddy_quad`'s voxel-wise metrics, so a bad mask partly hides itself from
+  its own QC report.
+- Two independent detectors, because each is blind to what the other catches.
+  **Mirror**: reflect the mask about its own centroid along the left-right axis
+  and ask where the other hemisphere has brain and this side does not. **Hull
+  band**: inside the *union* of the three directional span fills and within a
+  couple of voxels of the mask. The union matters -- the *intersection* is the
+  orthogonal convex hull, and a bite open to the outside lies outside it, so an
+  intersection test recovers almost nothing of exactly the defect it was written
+  for; a unit test asserts both numbers. A third measurement, the per-slice area
+  profile against a moving median, catches the defect neither detector sees: a
+  mask that ends at half its widest slice rather than tapering.
+- Bright voxels *just outside* the mask are recorded but deliberately **not** a
+  criterion. On a b=0 EPI the scalp, orbital fat and skull marrow are all bright,
+  so "the boundary runs through tissue" would fire on every subject; the same
+  reasoning intersects the mirror deficit with the span-fill union and thins it,
+  so reflecting a curved surface about a rounded centroid cannot accumulate a
+  one-voxel skin into a percentage.
+- Candidates are split into `missing_bright` and `missing_dark`, which demand
+  opposite responses. Bright is bet's fault and repairable; dark means the image
+  is empty there too -- a dropout -- which is reported as the data's problem and
+  never masked over, since eddy's outlier replacement is what addresses it. The
+  repair refuses to add a voxel that has no signal in it, at any step.
+- Three verdicts, not two. `implausible` -- a mask covering a few percent of the
+  field of view, a volume outside the range a brain can be, or a centre far from
+  the centre of the signal (bet landing on the neck) -- is **never** repaired:
+  growing it would make it a bigger wrong mask and silence the only symptom there
+  is. The absolute volume range applies only when the field of view is itself
+  head-sized, so it cannot fail a phantom or a test fixture for the wrong reason.
+- The repair is strictly additive, local and capped: union with a second `bet` at
+  a threshold *derived* from the stage's own (so a user who already lowered it
+  does not get a silent no-op), confined to the neighbourhood of the defect so
+  the rest of the mask stays exactly as bet made it, enclosed holes filled,
+  intensity growth off by default and bounded above by the in-mask 99.5th
+  percentile so it cannot walk into the skull. Above the cap the whole repair is
+  discarded and the mask reported instead. The caps differ by stage because the
+  trade-off does: for eddy, losing brain is the expensive error; for the
+  published `neuro/mask`, an over-inclusive mask contaminates every ROI mean.
+- Every threshold is measured rather than assumed, against real 1.5 mm data where
+  a healthy `bet` mask leaves 0.04-0.18% of its volume as brain-bright signal
+  outside it, has a worst localisation block 8-16% empty, and carries 1.99-2.21%
+  dark voxels just outside it (the inner table of the skull and the air around
+  the head). The defaults sit several times above each: `mask_warn_fraction` 1%
+  for a spread-out defect, `mask_min_defect_block` 35% of one block for a
+  concentrated one, 5% before dark voxels are called a dropout. Two traps are
+  closed by construction and recorded in the code: the block guard counts *mask*
+  voxels, never mask plus missing, since a block holding four mask voxels and 31
+  missing otherwise reads "89% missing" and is simply the periphery; and the
+  defect floor is a fraction of a block rather than a volume, since at 1.5 mm a
+  block holds 0.86 ml and any millilitre floor would be unreachable.
+- A repaired stage-1 mask changes eddy's results, so the log warns, the task page
+  says so in those terms, and `product.json` carries the before/after voxel
+  counts in provenance. Nothing here can fail a run: a coverage check that fails
+  runs is a coverage check people turn off.
+- `qc/` carries `mask_qc_<label>.json`, `mask_overlay_<label>.png`, and
+  **`eddy_mask.nii.gz` with `eddy_meanb0.nii.gz` -- the mask eddy actually used
+  and the image it was judged against**. Both halves are needed, because
+  `meanb0.nii.gz` is the *stage-3* mean b=0 and a mask cannot be re-checked
+  against an image it was not masked from; without the pair, "was the mask the
+  problem?" is unanswerable from the outputs after the fact. The overlay is drawn
+  by a ~25-line `zlib`/`struct` PNG writer rather than through FSL's bundled
+  matplotlib: the system interpreter has no matplotlib, and a path that no test
+  can execute is a path that rots. The tests decode the PNG and assert on its
+  pixels.
+- Config: `mask_check`, `mask_repair` (`auto`/`always`/`never`), `mask_repair_f`,
+  `mask_warn_fraction`, `mask_min_defect_block`, `mask_repair_cap`,
+  `mask_repair_cap_final`, `mask_repair_grow`, `mask_figure`. `always` exists so
+  a study can be processed identically rather than per-subject; mask repair is
+  not part of the eddy cohort signature, because `eddy_squad` compares eddy's
+  parameters and not masks, and adding it would split cohorts SQUAD would happily
+  pool.
+- The stub `bet` honours `-f`, without which the repair would be untestable (it
+  unions with a second bet at a lower threshold, a no-op against a stub that
+  ignores it), and `STUB_BET_DROP` makes it produce the bitten mask this whole
+  mechanism exists for. `make_test_data.py --dropout` zeroes a chunk of the
+  forward series for the same reason on real binaries.
+
+### Group quality control (eddy SQUAD)
+
+- A second brainlife App, sharing this repository and container: `run_squad.sh`
+  runs FSL's `eddy_squad` over the eddy QC databases of a whole study, and `main`
+  routes a task to it when its config carries the group input (`eddyqc`,
+  `qc_folders`) or sets `mode: "group"`.
+- Each subject publishes `output/eddyqc/` -- `qc.json`, `qc.pdf` and a
+  `squad_ready.json` carrying the subject label and a **cohort signature**. It is
+  separate from the `qc/` bundle because a group task stages every subject it is
+  given, and staging hundreds of mean-b0 volumes to read a 2 KB database is not
+  worth doing.
+- The signature is what makes a group run predictable. `eddy_squad` pools
+  subjects only when `eddy` ran with the same features for all of them, and
+  raises `Eddy output inconsistency detected!` otherwise -- which on brainlife is
+  easy to trip, because slice-to-volume correction depends on a GPU being visible
+  and the susceptibility field on the subject having a reverse phase-encoded
+  series. The group App buckets its inputs by signature, reports on the largest
+  cohort, and names who it left out and why. Volume counts are deliberately left
+  out: SQUAD pools those correctly, and excluding them would discard data for
+  nothing.
+- The signature compares the eddy **input** data as well as the output flags,
+  exactly. Newer FSL releases check the acquisition too -- `Inconsistency
+  detected in eddy input data in topup acquisition parameters!` is what a real
+  study hit -- so a key looser than that comparison pools subjects SQUAD then
+  rejects, failing the whole study instead of splitting one cohort. No rounding
+  with it: b-values of 1495 and 1500 are different cohorts, because they are
+  different to SQUAD. `signature_fields` narrows the comparison where an FSL
+  tolerates a difference, and a refusal the app did not predict is followed by a
+  field-by-field comparison of the staged subjects rather than a traceback.
+- The grouping variable is matched to subjects **by name** when given as a
+  `participants.tsv`-style table, because `eddy_squad` matches by line position
+  and a single excluded subject otherwise shifts every later value onto the wrong
+  person. A file already in SQUAD's format is passed through, and refused when
+  its value count does not match the cohort.
+- Single-subject reports are updated with the group's context by default
+  (`update_single_subject_reports`). The QC databases are copied into the work
+  directory first, since brainlife stages inputs read-only and `eddy_squad -u`
+  writes into the folders it is given, and the rewritten reports are collected
+  under each subject's label. The step needs two things the group report does not
+  -- every subject's own `qc.pdf`, and a PDF library in FSL's python to merge
+  with -- so both are checked first and the update alone is skipped when either is
+  absent. The library is checked by importing `eddy_qc.SQUAD.squad_update` itself
+  rather than by guessing its name, which has changed between releases, and the
+  Dockerfile installs `PyPDF2<3` into FSL's interpreter (not the system one,
+  which is not what eddy_squad runs under).
+- FSL 6.0.7.x cannot run that step at all: `squad_update` hands `ref_page` an
+  empty list where the eddy parameters belong, and it dies there on every run,
+  *after* writing the group database. The image fixes it -- the build guards
+  `ref_page.py`'s `ec.MethodsText()` call with a `hasattr` check, applies the edit
+  only when the unguarded call is present, keeps the original beside it as
+  `ref_page.py.orig`, and imports the module afterwards so a mangled file fails
+  the build instead of someone's task; `docker/selftest.sh` reports which of the
+  three states the image is in. The App also survives an unpatched FSL: it
+  notices the group report already exists, re-runs without `--update`, and says
+  so, because an image built elsewhere or a future FSL that moves the call must
+  still publish its group report.
+- `product.json` for a group task reports the cohort, the exclusions and the
+  per-subject motion, outlier and SNR distributions, worst subject first.
+- Subjects processed before the group App existed need no reprocessing: a QUAD
+  folder is found under `eddyqc/`, an archived `qc` dataset, an older task's
+  `output/qc/eddy_quad/`, or eddy_quad's own `.qc/`, and a subject label is taken
+  from the first directory in the path that names something other than a kind of
+  output.
+- Subject and session labels are settled once, in stage 0, and carried in
+  `state.sh`, so the QC dataset and the ROI tables agree on who a subject is.
+- `docker/selftest.sh` checks `eddy_squad` and the seaborn import its study-wise
+  plots need, which `eddy_quad` never touches.
 
 ### The atlas
 
