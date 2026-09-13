@@ -8,28 +8,12 @@ timer_start
 STATS_DIR="$WORK_DIR/roistats"
 mkdir -p "$STATS_DIR"
 
-# An explicit config key wins; otherwise take it from brainlife's input
-# metadata. Without this, every task labels its rows "subject", and a batch
-# concatenates into one indistinguishable block.
-SUBJECT="$(cfg subject "")"
-[ -z "$SUBJECT" ] && SUBJECT="$(cfg_input_meta subject)"
-[ -z "$SUBJECT" ] && SUBJECT="subject"
-
-SESSION="$(cfg session "")"
-[ -z "$SESSION" ] && SESSION="$(cfg_input_meta session)"
-
-# Optional: pull a session off the end of the subject label (sub01-MR03 ->
-# sub01 + MR03). Off by default -- an explicit session, or brainlife's input
-# metadata, is always preferred to guessing from a string.
-if [ -z "$SESSION" ] && is_true "$(cfg_bool split_subject_session false)"; then
-    SPLIT="$(python3 "$APP_DIR/python/labels.py" --subject "$SUBJECT" --split \
-             --session-prefixes "$(cfg session_prefixes 'ses,MR,visit,tp,V')")"
-    SUBJECT="${SPLIT%%$'\t'*}"
-    SESSION="${SPLIT#*$'\t'}"
-fi
-
-RUN_ID="$(run_identifier)"
-log "labelling results: subject=$SUBJECT session=${SESSION:-<none>} run_id=$RUN_ID"
+# Stage 0 settles the labels and carries them in state.sh. Resolve them again
+# when they are absent, so `run.sh --only 5` against a work directory written by
+# an older version of the app still labels its rows.
+[ -n "${SUBJECT:-}" ] || resolve_labels
+SESSION="${SESSION:-}"
+RUN_ID="${RUN_ID:-$(run_identifier)}"
 
 METRIC_ARGS=()
 for metric in $(cfg_list roi_metrics "FA MD AD RD"); do

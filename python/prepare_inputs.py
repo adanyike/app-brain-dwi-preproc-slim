@@ -398,6 +398,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                src["trt_source"]),
             file=sys.stderr,
         )
+
+    # The CSA sign convention is the opposite of dcm2niix's, which flips both
+    # series together and so leaves the correction unchanged (see pe_from_csa).
+    # It does change the acqparams file, though, and eddy_squad compares that
+    # across subjects exactly -- so a study whose sidecars are not all of one
+    # kind pools into two cohorts that cannot be compared with each other.
+    if any(src["pe_source"].startswith("Csa") for src in series_sources):
+        warn("phase encoding came from the Siemens CSA fields, whose sign "
+             "convention is the opposite of a BIDS PhaseEncodingDirection. The "
+             "correction is unaffected, but the acqparams differ from a subject "
+             "processed from a BIDS sidecar, and eddy_squad will not pool the "
+             "two. Use one kind of sidecar for the whole study.")
     print(
         "prepare_inputs: %d volumes (%d forward + %d reverse), %d b=0 total, "
         "%d used for topup, %d acqparams rows"

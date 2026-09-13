@@ -33,6 +33,23 @@ def brain_phantom(shape):
     return brain.astype(np.float32)
 
 
+def dropout(data, fraction=0.18):
+    """Zero a chunk on one side of the head, as a signal dropout does.
+
+    The smoke test needs this because a dropout is the one mask defect no repair
+    can fix: the image is empty there too, so the coverage check has to report it
+    as the data's problem rather than growing the mask over it.
+    """
+    shape = data.shape[:3]
+    centre = [shape[0] // 4, shape[1] // 2, shape[2] // 2]
+    radius = [max(2, int(fraction * n)) for n in shape]
+    grid = np.meshgrid(*[np.arange(n) for n in shape], indexing="ij")
+    inside = sum(((grid[axis] - centre[axis]) / float(radius[axis])) ** 2
+                 for axis in range(3)) < 1.0
+    data[inside] = 0.0
+    return data
+
+
 def synth_series(shape, bvals, bvecs, base):
     """Attenuate the phantom per volume so dtifit has something to fit."""
     n = len(bvals)
@@ -166,6 +183,10 @@ def main():
     ap.add_argument("--rdirections", type=int, default=3)
     ap.add_argument("--shells", default="1500",
                     help="comma-separated shell b-values, e.g. 1500,3000")
+    ap.add_argument("--dropout", action="store_true",
+                    help="zero a chunk of the forward series, as a signal dropout "
+                         "does, so the brain-mask coverage check has something "
+                         "unrepairable to report")
     args = ap.parse_args()
 
     shape = (args.size, args.size, args.slices)
@@ -185,8 +206,10 @@ def main():
         "Manufacturer": "synthetic",
     }
 
-    write_series(os.path.join(args.outdir, "dwi"), "dwi",
-                 synth_series(shape, fwd_bvals, fwd_bvecs, base),
+    forward = synth_series(shape, fwd_bvals, fwd_bvecs, base)
+    if args.dropout:
+        forward = dropout(forward)
+    write_series(os.path.join(args.outdir, "dwi"), "dwi", forward,
                  fwd_bvals, fwd_bvecs,
                  dict(common, PhaseEncodingDirection="j-"))
     write_series(os.path.join(args.outdir, "rdwi"), "dwi",

@@ -8,7 +8,18 @@
 #
 # brainlife clones this repository into the task directory, writes config.json
 # next to it, and runs ./main.  Everything below just picks a container runtime
-# and hands over to run.sh, which does the actual work.
+# and hands over to the driver that does the actual work:
+#
+#   run.sh        the per-subject pipeline (one diffusion dataset in)
+#   run_squad.sh  study-wise eddy QC with eddy_squad (N eddy QC datasets in)
+#
+# Both are registered on brainlife as separate Apps pointing at this repository;
+# which one a task wants is decided from its config.json below, because a group
+# App's input ('eddyqc', an array of per-subject QC datasets) has nothing in
+# common with the per-subject App's.  The PBS header above sizes the per-subject
+# job: group QC reads QC databases rather than images, so it needs neither the
+# GPU nor the memory, and the group App should be registered with its own
+# (much smaller) resource request.
 #
 # Environment overrides:
 #   APP_IMAGE        container to run (default below).  Either a docker:// URI
@@ -42,6 +53,29 @@ for prefix in SINGULARITYENV_ APPTAINERENV_; do
     export "${prefix}APP_DIR=$APP_DIR"
 done
 
+# --------------------------------------------------------------- which App ----
+# An explicit "mode" in config.json wins; otherwise the group App is recognised
+# by the input only it has.  jq is not guaranteed on the host -- the container
+# carries it, not necessarily the cluster node -- so fall back to grep on the
+# config when it is missing rather than refusing to start.
+DRIVER="run.sh"
+if [ -f config.json ]; then
+    if command -v jq >/dev/null 2>&1; then
+        MODE="$(jq -r '(.mode // "") | ascii_downcase' config.json 2>/dev/null || echo "")"
+        HAS_EDDYQC="$(jq -r 'if ((.eddyqc // .qc_folders // .quad_folders // null) != null) then "yes" else "no" end' config.json 2>/dev/null || echo no)"
+    else
+        MODE=""
+        grep -qE '"(eddyqc|qc_folders|quad_folders)"[[:space:]]*:' config.json && HAS_EDDYQC=yes || HAS_EDDYQC=no
+        grep -qE '"mode"[[:space:]]*:[[:space:]]*"(group|squad)"' config.json && MODE=group || true
+    fi
+    case "$MODE" in
+        group|squad) DRIVER="run_squad.sh" ;;
+        subject|preproc|"") [ "$HAS_EDDYQC" = yes ] && DRIVER="run_squad.sh" || true ;;
+        *) echo "ERROR: unrecognised mode '$MODE' in config.json (use 'subject' or 'group')" >&2; exit 1 ;;
+    esac
+fi
+echo "driver: $DRIVER"
+
 rm -rf output product.json
 mkdir -p output
 
@@ -63,7 +97,7 @@ fi
 
 if [ "${SKIP_CONTAINER:-0}" = "1" ]; then
     echo "running on the host (SKIP_CONTAINER=1)"
-    "$APP_DIR/run.sh"
+    "$APP_DIR/$DRIVER"
 elif command -v singularity >/dev/null 2>&1; then
     # --nv exposes the host CUDA driver so eddy_cuda can run; it is harmless
     # when there is no GPU, in which case run.sh falls back to a CPU eddy.
@@ -73,7 +107,7 @@ elif command -v singularity >/dev/null 2>&1; then
     # shellcheck disable=SC2086
     singularity exec $GPU_FLAG -e \
         "${SING_BIND[@]}" --pwd "$PWD" \
-        "$APP_IMAGE" "$APP_DIR/run.sh"
+        "$APP_IMAGE" "$APP_DIR/$DRIVER"
 elif command -v docker >/dev/null 2>&1; then
     case "$APP_IMAGE" in
         *.sif|*.simg)
@@ -91,15 +125,21 @@ elif command -v docker >/dev/null 2>&1; then
         -e MRTRIX_NTHREADS="$NCORES" \
         -e APP_DIR="$APP_DIR" \
         -u "$(id -u):$(id -g)" \
-        "${APP_IMAGE#docker://}" "$APP_DIR/run.sh"
+        "${APP_IMAGE#docker://}" "$APP_DIR/$DRIVER"
 else
     echo "no singularity or docker found; falling back to the host toolchain" >&2
-    "$APP_DIR/run.sh"
+    "$APP_DIR/$DRIVER"
 fi
 
-# brainlife treats a non-zero exit as a failed task.
-if [ ! -f output/tensor/fa.nii.gz ]; then
-    echo "ERROR: output/tensor/fa.nii.gz was not produced" >&2
+# brainlife treats a non-zero exit as a failed task, so assert on the one file
+# that means this task actually produced its result.
+if [ "$DRIVER" = run_squad.sh ]; then
+    EXPECTED="output/squad/group_db.json"
+else
+    EXPECTED="output/tensor/fa.nii.gz"
+fi
+if [ ! -f "$EXPECTED" ]; then
+    echo "ERROR: $EXPECTED was not produced" >&2
     exit 1
 fi
 echo "done"

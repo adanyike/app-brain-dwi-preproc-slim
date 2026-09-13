@@ -6,7 +6,11 @@
 #   output/tensor/         neuro/tensor  tensor + FA/MD/AD/RD/CL/CP/CS
 #   output/roistats/       raw           per-ROI tables
 #   output/reg/            raw           template-to-native transforms
-#   output/qc/             raw           eddy_quad report and eddy logs
+#   output/qc/             raw           eddy_quad report, eddy logs, the mask
+#                                        coverage reports and overlays
+#   output/eddyqc/         raw           just qc.json, qc.pdf and the cohort
+#                                        signature -- the lean dataset a group
+#                                        SQUAD run consumes, N subjects at once
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 source "$WORK_DIR/state.sh"
@@ -24,9 +28,14 @@ REG_WARPED_TEMPLATE="${REG_WARPED_TEMPLATE:-}"
 ROI_STATS_DIR="${ROI_STATS_DIR:-}"
 SHELL_REPORT="${SHELL_REPORT:-}"
 EDDY_QC_DIR="${EDDY_QC_DIR:-}"
+MASK_QC_DIR="${MASK_QC_DIR:-}"
 SLSPEC="${SLSPEC:-}"
+SUBJECT="${SUBJECT:-}"
+SESSION="${SESSION:-}"
+RUN_ID="${RUN_ID:-}"
+[ -n "$SUBJECT" ] || resolve_labels
 
-mkdir -p "$OUT_DIR"/{dwi,mask,tensor,roistats,reg,qc}
+mkdir -p "$OUT_DIR"/{dwi,mask,tensor,roistats,reg,qc,eddyqc}
 
 # --------------------------------------------------------------- neuro/dwi ----
 cp "$BIAS_CORRECTED"  "$OUT_DIR/dwi/dwi.nii.gz"
@@ -92,15 +101,62 @@ cp "$WORK_DIR/prep/acqparams.txt"  "$OUT_DIR/qc/acqparams.txt"  2>/dev/null || t
 cp "$WORK_DIR/prep/index.txt"      "$OUT_DIR/qc/index.txt"      2>/dev/null || true
 [ -n "$SLSPEC" ] && cp "$SLSPEC" "$OUT_DIR/qc/slspec.txt" || true
 cp "$MEAN_B0"                      "$OUT_DIR/qc/meanb0.nii.gz"  2>/dev/null || true
+
+# The mask eddy was actually given has never been published before, which made
+# "was the mask the problem?" unanswerable after the fact from the outputs alone.
+# Its image goes with it: meanb0.nii.gz above is the *stage-3* mean b=0 (state.sh
+# reassigns MEAN_B0 there), so without this the eddy mask cannot be re-checked
+# against the image it was judged on -- which is exactly what a later calibration
+# of the coverage thresholds needs.
+cp "$BRAIN_MASK" "$OUT_DIR/qc/eddy_mask.nii.gz" 2>/dev/null || true
+[ -n "${TOPUP_MEAN_B0:-}" ] && [ -f "$TOPUP_MEAN_B0" ] && \
+    cp "$TOPUP_MEAN_B0" "$OUT_DIR/qc/eddy_meanb0.nii.gz" || true
+MASK_QC_ARGS=()
+if [ -n "$MASK_QC_DIR" ] && [ -d "$MASK_QC_DIR" ]; then
+    for report in "$MASK_QC_DIR"/mask_qc_*.json; do
+        [ -f "$report" ] || continue
+        cp "$report" "$OUT_DIR/qc/"
+        label="$(basename "$report" .json)"; label="${label#mask_qc_}"
+        MASK_QC_ARGS+=(--mask-qc "$label=$report")
+    done
+    for overlay in "$MASK_QC_DIR"/mask_overlay_*.png; do
+        [ -f "$overlay" ] && cp "$overlay" "$OUT_DIR/qc/" || true
+    done
+fi
 for suffix in eddy_movement_rms eddy_restricted_movement_rms eddy_outlier_report \
               eddy_outlier_map eddy_parameters eddy_post_eddy_shell_alignment_parameters; do
     [ -f "${EDDY_OUT}.${suffix}" ] && cp "${EDDY_OUT}.${suffix}" "$OUT_DIR/qc/" || true
 done
 
+# ------------------------------------------------------- group-QC dataset ----
+# eddy_squad reads nothing but qc.json from each subject, so the dataset a group
+# run consumes carries only that, the single-subject report, and the signature
+# saying which cohort this subject belongs to. Keeping it separate from the qc/
+# bundle above matters: a group task stages every subject it was given, and the
+# qc/ bundle carries a mean b=0 volume and the outlier maps -- hundreds of
+# megabytes to read a 2 KB database, multiplied by the size of the study.
+QC_JSON="${EDDY_QC_DIR:+$EDDY_QC_DIR/qc.json}"
+if [ -n "$QC_JSON" ] && [ -f "$QC_JSON" ]; then
+    cp "$QC_JSON" "$OUT_DIR/eddyqc/qc.json"
+    [ -f "$EDDY_QC_DIR/qc.pdf" ] && cp "$EDDY_QC_DIR/qc.pdf" "$OUT_DIR/eddyqc/qc.pdf" || true
+    python3 "$APP_DIR/python/eddyqc_summary.py" \
+        --qc-json "$OUT_DIR/eddyqc/qc.json" \
+        --subject "$SUBJECT" --session "$SESSION" --run-id "$RUN_ID" \
+        --out "$OUT_DIR/eddyqc/squad_ready.json" \
+        || warn "could not summarise the eddy QC database for group analysis"
+    SQUAD_READY="$OUT_DIR/eddyqc/squad_ready.json"
+else
+    log "no eddy_quad database -- publishing no group-QC dataset"
+    rmdir "$OUT_DIR/eddyqc" 2>/dev/null || true
+    SQUAD_READY=""
+fi
+
 # ------------------------------------------------------------- product.json ----
 PRODUCT_ARGS=(--prep "$WORK_DIR/prep/prep.json")
 [ -n "$ROI_STATS_DIR" ] && PRODUCT_ARGS+=(--roi-stats "$ROI_STATS_DIR/roi_stats.json") || true
 [ -n "$SHELL_REPORT" ] && [ -f "$SHELL_REPORT" ] && PRODUCT_ARGS+=(--shells "$SHELL_REPORT") || true
+[ -n "$SQUAD_READY" ] && [ -f "$SQUAD_READY" ] && PRODUCT_ARGS+=(--eddy-qc "$SQUAD_READY") || true
+[ "${#MASK_QC_ARGS[@]}" -gt 0 ] && PRODUCT_ARGS+=("${MASK_QC_ARGS[@]}") || true
 python3 "$APP_DIR/python/make_product.py" \
     "${PRODUCT_ARGS[@]}" \
     --eddy-movement-rms "${EDDY_OUT}.eddy_movement_rms" \
