@@ -84,10 +84,9 @@ def mask_qc_messages(reports: Dict[str, dict]) -> List[Dict[str, str]]:
         verdict = report.get("verdict", "?")
         missing = report.get("missing", {})
         repair = report.get("repair", {})
-        where = ("; worst around %s mm"
-                 % report["worst_block"]["centre_mm"]) if (
-                     report.get("worst_block", {}).get("centre_mm")
-                     and report["worst_block"].get("fraction", 0) > 0.25) else ""
+        worst = report.get("worst_block") or {}
+        where = ("; worst around %s mm" % worst["centre_mm"]) if (
+            worst.get("centre_mm") and worst.get("counts_as_defect")) else ""
 
         if verdict == "ok":
             level, text = "info", (

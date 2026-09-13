@@ -108,6 +108,32 @@ MAX_FOV_ML = 12000.0
 # widest slice is not an end, it is a cut.
 ABRUPT_END_FRACTION = 0.4
 
+# How empty a block has to be before it is a defect rather than the ragged edge
+# every bet mask has. As a fraction of the block's own capacity, deliberately:
+# a volume in millilitres would be coupled to the voxel size, and at 1.5 mm
+# isotropic a block holds 0.86 ml, so any floor of a cubic centimetre or more
+# could never be reached at all.
+#
+# Measured on two real subjects (1.5 and 1.7 L masks, 1.5 mm isotropic): every
+# worst block held 20-40 missing voxels of a possible 256 -- 8-16%, 0.07-0.14 ml
+# -- at the temporal poles and orbitofrontal cortex, where bet -f 0.4 shaves off
+# a voxel or two. 35% of a block is two to four times that, and reads as a window
+# that is substantially empty where the mask is.
+MIN_DEFECT_BLOCK_FRACTION = 0.35
+
+# A block also has to *contain* mask before its missing fraction means anything.
+# Applied to the mask voxels alone, not mask + missing: a block with 4 mask
+# voxels and 31 missing reads "89% missing" and is simply the periphery. That
+# exact block is what flagged the first real subject this check ever saw.
+MIN_BLOCK_MASK_VOXELS = 32
+
+# Dark voxels just outside the mask, as a fraction of its volume, before the
+# report calls it signal dropout. The same two subjects sat at 1.99-2.21% across
+# all four masks with no dropout to speak of -- the inner table of the skull and
+# the air around the head are dark, and the hull band reaches them -- so a
+# threshold under that baseline puts "dropout" on every task page.
+DROPOUT_FRACTION = 0.05
+
 VERDICTS = ("ok", "suspicious", "implausible")
 
 
@@ -404,7 +430,9 @@ def plausible_fov(shape: Sequence[int], voxel_mm3: float) -> bool:
 def assess(image: np.ndarray, mask: np.ndarray, affine: np.ndarray,
            label: str = "mask", warn_fraction: float = 0.01,
            block: Sequence[int] = BLOCK, band: int = BAND,
-           min_block_voxels: int = 32) -> Dict[str, Any]:
+           min_block_mask_voxels: int = MIN_BLOCK_MASK_VOXELS,
+           min_defect_block: float = MIN_DEFECT_BLOCK_FRACTION,
+           dropout_fraction: float = DROPOUT_FRACTION) -> Dict[str, Any]:
     """Measure how well `mask` covers the brain in `image`, and return a verdict."""
     image = np.asarray(image, dtype=np.float64)
     if image.ndim == 4:
@@ -474,21 +502,41 @@ def assess(image: np.ndarray, mask: np.ndarray, affine: np.ndarray,
     }
 
     # --- localisation: which chunk, and where in the world ---
+    #
+    # Two guards, both put there by real data. The block must hold enough *mask*
+    # to be judged -- so a block at the periphery cannot report a high fraction
+    # off four voxels -- and enough of the block's own capacity must be missing
+    # that the ragged edge every bet mask has cannot read as a bite.
     missing_blocks = block_sums(missing_bright, block)
     covered_blocks = block_sums(mask, block)
     total = missing_blocks + covered_blocks
     with np.errstate(invalid="ignore", divide="ignore"):
-        fractions = np.where(total >= min_block_voxels,
+        fractions = np.where(covered_blocks >= min_block_mask_voxels,
                              missing_blocks / np.maximum(total, 1), 0.0)
-    worst = {"fraction": 0.0}
+    capacity = float(np.prod(block))
+    worst: Dict[str, Any] = {"fraction": 0.0, "voxels": 0, "volume_ml": 0.0,
+                             "of_block": 0.0, "counts_as_defect": False,
+                             "min_defect_block": float(min_defect_block)}
     if fractions.size and fractions.max() > 0:
         index = np.unravel_index(int(np.argmax(fractions)), fractions.shape)
         centre = [(index[axis] + 0.5) * block[axis] for axis in range(len(block))]
+        voxels = int(missing_blocks[index])
+        fraction = float(fractions[index])
+        of_block = voxels / capacity
         worst = {
-            "fraction": round(float(fractions[index]), 4),
-            "voxels": int(missing_blocks[index]),
+            "fraction": round(fraction, 4),
+            "voxels": voxels,
+            "volume_ml": round(voxels * voxel_mm3 / 1000.0, 3),
+            "of_block": round(of_block, 4),
+            "mask_voxels": int(covered_blocks[index]),
             "block": [int(v) for v in index],
             "centre_mm": to_world(affine, centre),
+            # One test, not two: mask and missing are disjoint within a block,
+            # so missing/(mask + missing) is always at least missing/capacity --
+            # a separate "more than a quarter of what is here is missing" test is
+            # implied by this one and only made the threshold half-adjustable.
+            "counts_as_defect": bool(of_block >= min_defect_block),
+            "min_defect_block": float(min_defect_block),
         }
     report["worst_block"] = worst
 
@@ -556,10 +604,10 @@ def assess(image: np.ndarray, mask: np.ndarray, affine: np.ndarray,
             reasons.append("%.1f%% of the mask volume again is brain-bright "
                            "signal just outside it"
                            % (100.0 * report["missing"]["bright_fraction"]))
-        if worst["fraction"] > 0.25:
-            reasons.append("one %dx%dx%d block is %.0f%% missing%s"
+        if worst["counts_as_defect"]:
+            reasons.append("one %dx%dx%d block is %.0f%% missing (%.2f ml)%s"
                            % (block[0], block[1], block[2],
-                              100.0 * worst["fraction"],
+                              100.0 * worst["fraction"], worst["volume_ml"],
                               " near %s mm" % worst.get("centre_mm")
                               if worst.get("centre_mm") else ""))
         if report["truncation"]["slices"]:
@@ -573,7 +621,8 @@ def assess(image: np.ndarray, mask: np.ndarray, affine: np.ndarray,
     report["verdict"] = verdict
     report["repairable"] = verdict == "suspicious"
     report["reasons"] = reasons
-    if report["missing"]["dark_fraction"] > warn_fraction:
+    report["dropout_fraction"] = float(dropout_fraction)
+    if report["missing"]["dark_fraction"] > dropout_fraction:
         notes.append("%.1f%% of the mask volume again is *dark* just outside it: "
                      "signal dropout, not a mask error -- no mask can recover "
                      "signal that is not there, and eddy's outlier replacement "
@@ -838,7 +887,8 @@ def cmd_check(args: argparse.Namespace) -> int:
     image, _ = load_image(args.image)
     mask, mask_img = load_mask(args.mask)
     report = assess(image, mask, mask_img.affine, label=args.label,
-                    warn_fraction=args.warn_fraction)
+                    warn_fraction=args.warn_fraction,
+                    min_defect_block=args.min_defect_block)
     if args.out:
         write_json(args.out, report)
     print(report["verdict"])
@@ -869,10 +919,14 @@ def cmd_repair(args: argparse.Namespace) -> int:
     if record["applied"]:
         report["after"] = assess(image, repaired, mask_img.affine,
                                  label="%s (repaired)" % report.get("label", "mask"),
-                                 warn_fraction=args.warn_fraction)
+                                 warn_fraction=args.warn_fraction,
+                                 min_defect_block=args.min_defect_block)
     if args.report:
         write_json(args.report, report)
-    print("repaired" if record["applied"] else "kept")
+    if record["applied"] and "after" in report:
+        print("repaired %s" % report["after"]["verdict"])
+    else:
+        print("kept")
     if record.get("reason"):
         print("  %s" % record["reason"], file=sys.stderr)
     return 0
@@ -907,6 +961,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     check.add_argument("--mask", required=True)
     check.add_argument("--label", default="mask")
     check.add_argument("--warn-fraction", type=float, default=0.01)
+    check.add_argument("--min-defect-block", type=float,
+                       default=MIN_DEFECT_BLOCK_FRACTION,
+                       help="how much of one localisation block must be missing "
+                            "before it counts as a defect rather than a ragged edge")
     check.add_argument("--out", help="write the report here")
     check.set_defaults(func=cmd_check)
 
@@ -921,6 +979,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     fix.add_argument("--cap", type=float, default=0.25,
                      help="discard the repair if it adds more than this fraction")
     fix.add_argument("--warn-fraction", type=float, default=0.01)
+    fix.add_argument("--min-defect-block", type=float,
+                     default=MIN_DEFECT_BLOCK_FRACTION)
     fix.add_argument("--confine", choices=("local", "none"), default="local",
                      help="add voxels only around the defect the check found "
                           "(local, the default), or anywhere the permissive mask "

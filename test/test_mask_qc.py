@@ -115,6 +115,7 @@ class TestBiteRecovery(unittest.TestCase):
         self.assertGreater(report["missing"]["by_criterion"]["mirror"], 0)
         self.assertGreater(report["missing"]["by_criterion"]["hull_band"], 0)
         self.assertGreater(report["worst_block"]["fraction"], 0.25)
+        self.assertTrue(report["worst_block"]["counts_as_defect"])
         self.assertEqual(len(report["worst_block"]["centre_mm"]), 3)
 
     def test_a_good_mask_is_ok_despite_the_bright_scalp(self):
@@ -125,19 +126,91 @@ class TestBiteRecovery(unittest.TestCase):
         self.assertGreater(report["boundary_through_tissue"]["voxels"], 0)
 
 
+class TestBlockRuleCalibration(unittest.TestCase):
+    """The localisation rule, as calibrated on the first two real subjects.
+
+    Both came back `suspicious` off a single block, and neither was a defect:
+
+    | report        | block   | mask in block | missing        | verdict then |
+    |---------------|---------|---------------|----------------|--------------|
+    | A eddy        | 89%     | **4 voxels**  | 31 (0.105 ml)  | suspicious   |
+    | A eddy repaired | 29%   | 100           | 40 (0.135 ml)  | suspicious   |
+    | B eddy        | 26%     | 85            | 30 (0.101 ml)  | suspicious   |
+
+    Two things were wrong. The minimum-size guard counted mask *plus* missing, so
+    a block holding four mask voxels and 31 missing passed it and reported 89%
+    missing -- arithmetic at the periphery, not anatomy. And nothing required the
+    defect to be a meaningful size: 20-40 voxels is the ragged edge bet leaves at
+    the temporal poles on every subject.
+    """
+
+    def test_a_block_must_hold_real_mask_before_its_fraction_means_anything(self):
+        image, brain, coords = head()
+        mask = brain & ~sphere(coords, (-16, 0, 0), 8.0)
+        # The guard is on the mask alone, not mask + missing. Raise it above
+        # anything a block could hold and no block is eligible, however much is
+        # missing -- which is what subject A's four-voxel block needed.
+        blind = mq.assess(image, mask, AFFINE, min_block_mask_voxels=10 ** 6)
+        self.assertEqual(blind["worst_block"]["fraction"], 0.0)
+        self.assertFalse(blind["worst_block"]["counts_as_defect"])
+        normal = mq.assess(image, mask, AFFINE)
+        self.assertGreaterEqual(normal["worst_block"]["mask_voxels"],
+                                mq.MIN_BLOCK_MASK_VOXELS)
+
+    def test_a_ragged_edge_the_size_of_the_real_ones_is_not_a_defect(self):
+        image, brain, coords = head()
+        # ~30 voxels shaved off the surface, the size both real subjects showed.
+        nibble = sphere(coords, (-20, 0, -8), 2.2)
+        mask = brain & ~nibble
+        self.assertLess(int(nibble.sum()), 60)
+        report = mq.assess(image, mask, AFFINE)
+        self.assertLess(report["worst_block"]["of_block"], mq.MIN_DEFECT_BLOCK_FRACTION)
+        self.assertFalse(report["worst_block"]["counts_as_defect"])
+        self.assertEqual(report["verdict"], "ok", report["reasons"])
+
+    def test_a_real_bite_still_counts(self):
+        image, brain, coords = head()
+        mask = brain & ~sphere(coords, (-16, 0, 0), 8.0)
+        report = mq.assess(image, mask, AFFINE)
+        self.assertTrue(report["worst_block"]["counts_as_defect"])
+        self.assertGreaterEqual(report["worst_block"]["of_block"],
+                                mq.MIN_DEFECT_BLOCK_FRACTION)
+        self.assertEqual(report["verdict"], "suspicious")
+
+    def test_the_block_floor_is_reachable_at_any_voxel_size(self):
+        # A millilitre floor would be unreachable at 1.5 mm isotropic, where one
+        # 8x8x4 block holds 0.86 ml. A fraction of the block cannot be.
+        self.assertLessEqual(mq.MIN_DEFECT_BLOCK_FRACTION, 1.0)
+        self.assertGreater(mq.MIN_DEFECT_BLOCK_FRACTION, 0.0)
+
+    def test_the_floor_is_tunable(self):
+        image, brain, coords = head()
+        mask = brain & ~sphere(coords, (-16, 0, 0), 8.0)
+        loose = mq.assess(image, mask, AFFINE)
+        strict = mq.assess(image, mask, AFFINE, min_defect_block=0.99)
+        self.assertTrue(loose["worst_block"]["counts_as_defect"])
+        self.assertFalse(strict["worst_block"]["counts_as_defect"])
+        # The block reason is gone, but a defect this size still moves the
+        # global fraction, so the verdict does not quietly become "ok".
+        self.assertEqual(strict["verdict"], "suspicious")
+
+
 class TestDropout(unittest.TestCase):
     """Signal dropout: the image is empty there too, so nothing can be recovered."""
 
     def setUp(self):
         self.image, self.brain, self.coords = head()
-        self.hole = sphere(self.coords, (-16, 0, 0), 8.0)
+        # Big enough to clear DROPOUT_FRACTION: real healthy subjects sit at
+        # 2.0-2.2% dark just outside the mask, so the fixture has to be well
+        # above that to mean anything.
+        self.hole = sphere(self.coords, (-14, 0, 0), 10.0)
         self.image[self.hole] = 0.0
         self.mask = self.brain & ~self.hole
 
     def test_it_is_reported_as_dark_not_as_a_mask_error(self):
         report = mq.assess(self.image, self.mask, AFFINE)
         self.assertLess(report["missing"]["bright_fraction"], 0.005)
-        self.assertGreater(report["missing"]["dark_fraction"], 0.01)
+        self.assertGreater(report["missing"]["dark_fraction"], mq.DROPOUT_FRACTION)
         self.assertTrue(report["dropout"])
         self.assertEqual(report["verdict"], "ok")
         self.assertTrue(any("dropout" in note for note in report["notes"]))

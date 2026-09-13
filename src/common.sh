@@ -268,13 +268,14 @@ check_brain_mask() {
     fi
     [ -f "$image" ] && [ -f "$mask" ] || { warn "no $label mask to check"; return 0; }
 
-    local policy warn_fraction report verdict
+    local policy warn_fraction min_defect report verdict
     policy="$(lower "$(cfg mask_repair auto)")"
     case "$policy" in
         auto|always|never) ;;
         *) die "config key 'mask_repair' should be auto, always or never, got '$policy'" ;;
     esac
     warn_fraction="$(cfg mask_warn_fraction 0.01)"
+    min_defect="$(cfg mask_min_defect_block 0.35)"
     mkdir -p "$outdir"
     report="$outdir/mask_qc_${label}.json"
 
@@ -282,7 +283,8 @@ check_brain_mask() {
     # it resolved, so the branch below reads as the decision it is.
     if ! verdict="$(python3 "$APP_DIR/python/mask_qc.py" check \
             --image "$image" --mask "$mask" --label "$label" \
-            --warn-fraction "$warn_fraction" --out "$report")"; then
+            --warn-fraction "$warn_fraction" --min-defect-block "$min_defect" \
+            --out "$report")"; then
         warn "the $label brain-mask check could not be run; the mask is unchanged"
         return 0
     fi
@@ -316,9 +318,12 @@ check_brain_mask() {
                 --permissive "$outdir/${label}_permissive_mask.nii.gz" \
                 --out-mask "$mask" --report "$report" \
                 --grow "$grow" --cap "$cap" --confine "$confine" \
-                --warn-fraction "$warn_fraction" >/dev/null; then
+                --warn-fraction "$warn_fraction" --min-defect-block "$min_defect" \
+                >/dev/null; then
             if [ "$(jq -r '.repair.applied' "$report")" = true ]; then
-                warn "the $label brain mask was repaired: $(jq -r '.repair.added_voxels' "$report") voxels added ($(jq -r '.repair.added_fraction * 100 | floor' "$report")% of it). Anything computed with this mask differs from an unrepaired run."
+                # A repair that did not clear the verdict is worth saying out
+                # loud: eddy's mask changed and the mask is still not right.
+                warn "the $label brain mask was repaired: $(jq -r '.repair.added_voxels' "$report") voxels added ($(jq -r '.repair.added_fraction * 100 | . * 100 | round / 100' "$report")% of it), and now reads $(jq -r '.after.verdict // "unknown"' "$report"). Anything computed with this mask differs from an unrepaired run."
             else
                 warn "the $label brain mask was left as bet made it: $(jq -r '.repair.reason // "nothing to add"' "$report")"
             fi

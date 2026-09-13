@@ -69,6 +69,33 @@
   part of the eddy cohort signature, because `eddy_squad` compares eddy's
   parameters and not masks, and adding it would split cohorts SQUAD would happily
   pool.
+- **Calibrated against real data**, which moved three things. The first two
+  subjects ever put through the check (1.5 mm isotropic, 1.5 and 1.7 L masks)
+  both came back `suspicious`, and neither had anything wrong with it.
+  - The localisation guard counted mask **plus** missing voxels, so a block
+    holding *four* mask voxels and 31 missing passed it and reported "89%
+    missing" -- arithmetic at the periphery, not anatomy. The guard now counts
+    mask voxels alone.
+  - Nothing required a concentrated defect to be a meaningful size. Every worst
+    block on real data was 20-40 voxels (0.07-0.14 ml) at the temporal poles and
+    orbitofrontal cortex, where `bet -f 0.4` shaves off a voxel or two. A block
+    must now be `mask_min_defect_block` (35%) empty of its own capacity. That is
+    a *fraction of a block*, not a volume, deliberately: at 1.5 mm isotropic one
+    block holds 0.86 ml, so any millilitre floor would have been unreachable and
+    would have disabled the rule outright on exactly this data.
+    The companion "more than a quarter of what is in this block is missing" test
+    went with it -- mask and missing are disjoint within a block, so it was
+    implied by the new one and only made the threshold half-adjustable.
+  - `dropout` fired on every healthy subject: all four real masks sat at
+    1.99-2.21% dark just outside them, because the inner table of the skull and
+    the air around the head are dark and the hull band reaches them. The dropout
+    note now has its own threshold (5%) instead of borrowing `mask_warn_fraction`.
+  `mask_warn_fraction` itself was left alone: real masks measured 0.04-0.18%
+  against a 1% threshold, which is the headroom it was meant to have.
+- The repair's log line said "1396 voxels added (0% of it)" -- a percentage
+  floored to an integer, so every repair under 1% of the mask read as zero. It
+  now reports two decimals, and says what the mask reads *after* the repair, so a
+  repair that did not clear the verdict cannot look like one that did.
 - The stub `bet` now honours `-f`, without which the repair was untestable (it
   unions with a second bet at a lower threshold, a no-op against a stub that
   ignores it), and `STUB_BET_DROP` makes it produce the bitten mask this whole

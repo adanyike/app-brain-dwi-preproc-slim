@@ -49,6 +49,7 @@
   "mask_repair": "auto",
   "mask_repair_f": "auto",
   "mask_warn_fraction": 0.01,
+  "mask_min_defect_block": 0.35,
   "mask_repair_cap": 0.25,
   "mask_repair_cap_final": 0.1,
   "mask_repair_grow": 0,

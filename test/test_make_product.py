@@ -39,7 +39,9 @@ MASK_REPAIRED = {
     "label": "eddy", "verdict": "suspicious", "volume_ml": 1302.0, "n_voxels": 162750,
     "missing": {"bright_fraction": 0.032, "bright_voxels": 5208},
     "reasons": ["3.2% of the mask volume again is brain-bright signal just outside it"],
-    "worst_block": {"fraction": 0.64, "centre_mm": [-44.0, -18.0, 12.0]},
+    "worst_block": {"fraction": 0.64, "of_block": 0.52, "counts_as_defect": True,
+                    "voxels": 133, "volume_ml": 0.45, "mask_voxels": 75,
+                    "centre_mm": [-44.0, -18.0, 12.0]},
     "notes": [], "dropout": False,
     "repair": {"applied": True, "added_voxels": 4100, "added_fraction": 0.025,
                "steps": [{"step": "union with a permissive bet, where there is signal",
@@ -141,10 +143,22 @@ class TestMakeProduct(unittest.TestCase):
                               mask_qc={"eddy": MASK_REPAIRED})
         warnings = [e["msg"] for e in product["brainlife"] if e.get("type") == "warning"]
         self.assertTrue(any("missing brain" in m for m in warnings))
+        # A defect the block rule counted is located for the reader; one it did
+        # not is not, because the coordinates would point at the ragged edge.
+        self.assertTrue(any("worst around" in m for m in warnings))
         self.assertTrue(any("was repaired" in m and "eddy was given" in m
                             for m in warnings))
         self.assertTrue(
             product["provenance"]["brain_mask"]["eddy"]["repair"]["applied"])
+
+    def test_a_block_that_did_not_count_is_not_located(self):
+        report = dict(MASK_REPAIRED,
+                      worst_block=dict(MASK_REPAIRED["worst_block"],
+                                       counts_as_defect=False))
+        product = self._build(roi=ROI, topup_applied="true", slice_to_volume="true",
+                              mask_qc={"eddy": report})
+        warnings = [e["msg"] for e in product["brainlife"] if e.get("type") == "warning"]
+        self.assertFalse(any("worst around" in m for m in warnings))
 
     def test_a_mask_left_alone_at_the_cap_says_why(self):
         report = dict(MASK_REPAIRED,

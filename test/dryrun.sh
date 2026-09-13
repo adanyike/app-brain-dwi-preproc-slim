@@ -501,8 +501,15 @@ check "provenance records both masks" bash -c '
 mask_scenario "17b-mask-bitten" '{"eddy_binary":"eddy_openmp","atlas_registration":false}' \
     STUB_BET_DROP=1
 check "the bitten mask is suspicious" test "$(mask_field eddy .verdict)" = suspicious
-check "the reason is localised to a block" \
-    bash -c 'printf "%s" "$1" | grep -q "block is"' _ "$(mask_field eddy '.reasons | join(" ")')"
+# At the default floor the stub's bite fills 14% of a localisation block, under
+# MIN_DEFECT_BLOCK_FRACTION -- so the *global* fraction is what flags it, and the
+# block is reported without being called a defect. Real subjects behave the same
+# way: their worst blocks were 8-16% and none of them was a defect.
+check "the global fraction is what flagged it" \
+    bash -c 'printf "%s" "$1" | grep -q "brain-bright signal just outside it"' \
+    _ "$(mask_field eddy '.reasons | join(" ")')"
+check "the block is located but not called a defect" \
+    test "$(mask_field eddy .worst_block.counts_as_defect)" = false
 check "both detectors fired" \
     test "$(mask_field eddy '.missing.by_criterion.mirror > 0 and .missing.by_criterion.hull_band > 0')" = true
 check "the eddy mask was repaired" test "$(mask_field eddy .repair.applied)" = true
@@ -526,10 +533,18 @@ check "the coverage figure shows where it was missing" bash -c '
          "$1/product.json")" = 1 ]' _ "$SCEN"
 
 # --- mask_repair: never reports and changes nothing ---
+# Also the only scenario that lowers mask_min_defect_block, so the config key
+# reaches mask_qc.py's --min-defect-block and the block reason comes back.
 mask_scenario "17c-mask-repair-never" \
-    '{"eddy_binary":"eddy_openmp","atlas_registration":false,"mask_repair":"never"}' \
+    '{"eddy_binary":"eddy_openmp","atlas_registration":false,"mask_repair":"never",
+      "mask_min_defect_block":0.05}' \
     STUB_BET_DROP=1
 check "the defect is still reported" test "$(mask_field eddy .verdict)" = suspicious
+check "a lowered block floor reaches the check" \
+    test "$(mask_field eddy .worst_block.min_defect_block)" = 0.05
+check "and the reason is localised to a block" \
+    bash -c 'printf "%s" "$1" | grep -q "block is"' \
+    _ "$(mask_field eddy '.reasons | join(" ")')"
 check "but nothing was repaired" test "$(mask_field eddy '.repair // "none"')" = none
 check "the log says why" grep -q "mask_repair=never" "$SCEN/log.txt"
 check "the task page still warns" bash -c '

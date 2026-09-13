@@ -146,6 +146,16 @@ signal the mask is at fault and can be repaired, and where the image is dark too
 the **data** is at fault — a dropout — which is reported and never masked over,
 since `eddy`'s outlier replacement, not a bigger mask, is what addresses it.
 
+Two numbers decide it, and both are measured rather than assumed. A defect that
+is spread out has to exceed `mask_warn_fraction` of the mask volume; a defect
+that is concentrated is caught by the localisation blocks instead, since a bite
+worth repairing can be far too small to move a whole-mask fraction. On real
+1.5 mm data a healthy `bet` mask leaves 0.04–0.18% of its volume as brain-bright
+signal just outside it, and its worst block is 8–16% missing — the ragged edge
+at the temporal poles and orbitofrontal cortex that every mask has. The defaults
+sit several times above both, so a normal subject reads `ok` and a real bite does
+not.
+
 The repair is deliberately dull: union with a second `bet` at a lower threshold,
 confined to the neighbourhood of the defect so the rest of the mask stays exactly
 as `bet` made it, plus enclosed holes, only where there is signal, never into a
@@ -172,6 +182,7 @@ answered after the fact.
 | `mask_repair` | `auto` | `auto` repairs only a mask the check flags; `always` repairs every subject's, so a study is processed identically; `never` reports and changes nothing |
 | `mask_repair_f` | `auto` | The `bet` threshold for the permissive estimate. `auto` is the stage's own `f` minus 0.2 |
 | `mask_warn_fraction` | `0.01` | How much brain-bright signal outside the mask, as a fraction of its volume, counts as missing brain |
+| `mask_min_defect_block` | `0.35` | How much of one 8×8×4 localisation block must be missing before a *concentrated* defect is called one. Below this it is the ragged edge every `bet` mask has |
 | `mask_repair_cap` / `mask_repair_cap_final` | `0.25` / `0.1` | Discard the repair if it would add more than this fraction of the mask |
 | `mask_repair_grow` | `0` | Extra intensity-growth iterations on the stage-1 mask. Off by default; bounded above by the in-mask 99.5th percentile so it cannot walk into the skull |
 | `mask_figure` | `true` | Write the overlay PNGs |
