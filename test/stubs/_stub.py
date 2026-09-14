@@ -418,11 +418,40 @@ def cmd_eddy_squad(argv):
 
     # Newer FSL releases compare the eddy *input* data as well, and refuse the
     # study when it differs -- naming one field, which is how a real cohort
-    # split first announced itself.
-    for name in sorted({k for db in databases for k in db
-                        if k.startswith("data_") and not k.startswith("data_file_")}):
+    # split first announced itself. squad_db.py does not compare every data_
+    # field, and does not compare them all the same way; a stub that did would
+    # be testing a rule FSL does not have.
+    #
+    #   exact (!=)          the five below
+    #   np.allclose         data_unique_bvals (atol=20, after a length check),
+    #                       data_vox_size (rtol=1e-2)
+    #   not compared        data_protocol, data_unique_pes, everything else
+    #
+    # Every subject is compared against the first in the list, which is SQUAD's
+    # ref_data.
+    reference = databases[0]
+    for name in ("data_no_shells", "data_no_PE_dirs", "data_no_b0_vols",
+                 "data_no_dw_vols", "data_eddy_para"):
         if len({json.dumps(db.get(name), sort_keys=True) for db in databases}) > 1:
             sys.exit("ValueError: Inconsistency detected in eddy input data in %s!" % name)
+
+    def allclose(values, reference_values, atol, rtol):
+        """np.allclose, for the two fields SQUAD hands to it."""
+        try:
+            a = [float(v) for v in values]
+            b = [float(v) for v in reference_values]
+        except (TypeError, ValueError):
+            return values == reference_values
+        if len(a) != len(b):
+            return False
+        return all(abs(x - y) <= atol + rtol * abs(y) for x, y in zip(a, b))
+
+    for name, atol, rtol in (("data_unique_bvals", 20.0, 1e-5),
+                             ("data_vox_size", 1e-8, 1e-2)):
+        for db in databases[1:]:
+            if not allclose(db.get(name) or [], reference.get(name) or [], atol, rtol):
+                sys.exit("ValueError: Inconsistency detected in eddy input data in %s!"
+                         % name)
 
     if grouping is not None:
         with open(grouping) as fh:

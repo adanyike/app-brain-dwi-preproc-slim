@@ -101,6 +101,45 @@ class TestMessages(unittest.TestCase):
         self.assertIn("incompatible cohorts", " ".join(messages(product, "error")))
         self.assertEqual(figures(product), [])
 
+    def test_a_harmonised_cohort_says_so_and_says_what_it_costs(self):
+        # pool_across_acquisition rewrote a field in the staged databases, so the
+        # task page has to say which subjects, what their own values were, and
+        # which QC index the rewrite makes incomparable.
+        cohorts = dict(COHORTS)
+        cohorts["chosen"] = dict(COHORTS["chosen"], harmonised={
+            "field": "data_eddy_para",
+            "meaning": "topup acquisition parameters",
+            "reference": [[0, 1, 0, 0.0965997], [0, -1, 0, 0.0965997]],
+            "reference_subject": "sub-01",
+            "readout_tolerance": 0.05,
+            "per_subject": {"sub-03": [[0, 1, 0, 0.0959097], [0, -1, 0, 0.0959097]]},
+        })
+        warnings = " ".join(messages(build(cohorts=cohorts, db=GROUP_DB), "warning"))
+        self.assertIn("pool_across_acquisition", warnings)
+        self.assertIn("topup acquisition parameters", warnings)
+        self.assertIn("sub-03", warnings)
+        self.assertIn("0.0959097", warnings)
+        self.assertIn("The input datasets were not changed", warnings)
+        self.assertIn("qc_vox_displ_std", warnings)
+
+    def test_a_difference_squad_never_compares_is_disclosed_on_the_page(self):
+        cohorts = dict(COHORTS)
+        cohorts["chosen"] = dict(COHORTS["chosen"], disclosed_differences=[{
+            "field": "data_protocol",
+            "meaning": "acquisition protocol (volumes per shell)",
+            "values": [{"value": [[1500, 8], [3000, 8]], "subjects": ["sub-01", "sub-02"]},
+                       {"value": [[1500, 4], [3000, 12]], "subjects": ["sub-03"]}],
+        }])
+        warnings = " ".join(messages(build(cohorts=cohorts, db=GROUP_DB), "warning"))
+        self.assertIn("acquisition protocol (volumes per shell) differs within "
+                      "this cohort", warnings)
+        self.assertIn("sub-03", warnings)
+        self.assertIn("eddy_squad does not compare that field", warnings)
+
+    def test_nothing_harmonised_says_nothing(self):
+        warnings = " ".join(messages(build(db=GROUP_DB), "warning"))
+        self.assertNotIn("pool_across_acquisition", warnings)
+
     def test_reports_the_grouping_variable(self):
         cohorts = dict(COHORTS, variable={"name": "age", "continuous": True,
                                           "source": "table 'participants.tsv'"})

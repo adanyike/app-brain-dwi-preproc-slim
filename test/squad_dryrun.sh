@@ -206,11 +206,11 @@ check "product.json still renders the error" bash -c '
     | grep -q "incompatible"'
 
 # ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
 # The same trap from the other direction: identical eddy options, but a
-# different readout time in the acquisition parameters. Newer FSL compares the
-# eddy *input* data too and refuses the study over it, so the cohort key has to
-# be at least as strict -- and exact, since SQUAD does not round.
+# different readout time in the acquisition parameters. squad_db.py compares
+# data_eddy_para exactly -- one of the five it does -- and refuses the study
+# over it, so the cohort key splits on it rather than let the whole run fail.
+# 2g is the other half of this: what to do when those two cohorts are the study.
 printf '\n--- 2d-different-acquisition-parameters ---\n'
 SCEN="$ROOT/2d-acqparams"
 mkdir -p "$SCEN"
@@ -236,37 +236,68 @@ check "and shows both values" bash -c '
 check "eddy_squad never saw the mixture" bash -c '
     ! grep -qi "inconsistency detected" "'"$SCEN"'/log.txt"'
 
-# A shell b-value that differs by 5 is a different cohort too: SQUAD compares
-# these exactly, so rounding them together here would fail the whole study.
+# A shell b-value that differs by 5 is the SAME cohort: squad_db.py compares
+# these with np.allclose(atol=20), so splitting them here would refuse a study
+# SQUAD accepts -- which is exactly what a real two-site study was told.
 printf '\n--- 2e-near-identical-bvalues ---\n'
 SCEN="$ROOT/2e-bvals"
 mkdir -p "$SCEN"
-for index in 1 2 3; do
+for index in 1 2 3 4; do
     qc_dataset "$SCEN/input/sub-0$index" "sub-0$index" true
 done
-for index in 4; do
-    qc_dataset "$SCEN/input/sub-0$index" "sub-0$index" true
-    python3 - "$SCEN/input/sub-04/qc.json" <<'EOPY'
+python3 - "$SCEN/input/sub-04/qc.json" <<'EOPY'
 import json, sys
 path = sys.argv[1]
 qc = json.load(open(path))
 qc["data_unique_bvals"] = [1495, 3000]
 json.dump(qc, open(path, "w"), indent=4)
 EOPY
-done
 group_config "$SCEN/config.json" '{}' "$SCEN"/input/sub-0*
 ( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run_squad.sh" ) \
     > "$SCEN/log.txt" 2>&1
-check "the task succeeds" test $? -eq 0
-check "b=1495 is its own cohort" bash -c '
+STATUS=$?
+check "the task succeeds" test "$STATUS" -eq 0
+[ "$STATUS" -eq 0 ] || tail -20 "$SCEN/log.txt"
+check "b=1495 pools with b=1500, as SQUAD would" bash -c '
+    [ "$(jq -r ".chosen.n_subjects" "'"$SCEN"'/output/squad/cohorts.json")" = "4" ]'
+check "nothing was excluded over it" bash -c '
+    [ "$(jq -r ".excluded | length" "'"$SCEN"'/output/squad/cohorts.json")" = "0" ]'
+# The contract, not just our opinion of it: the tool itself accepts the cohort.
+check "eddy_squad pooled all four" bash -c '
+    [ "$(jq -r ".data_no_subjects" "'"$SCEN"'/output/squad/group_db.json")" = "4" ]'
+check "and did not refuse the mixture" bash -c '
+    ! grep -qi "inconsistency detected" "'"$SCEN"'/log.txt"'
+check "the report records the tolerance it applied" bash -c '
+    [ "$(jq -r ".comparison.tolerant.data_unique_bvals.atol == 20" \
+         "'"$SCEN"'/output/squad/cohorts.json")" = "true" ]'
+
+# A difference SQUAD really does compare exactly -- one dropped volume -- splits
+# the cohort; and the study can be pooled anyway by narrowing what the cohort key
+# compares, for a difference this FSL turns out to tolerate.
+printf '\n--- 2f-narrowed-signature ---\n'
+SCEN="$ROOT/2f-dropped-volume"
+mkdir -p "$SCEN"
+for index in 1 2 3 4; do
+    qc_dataset "$SCEN/input/sub-0$index" "sub-0$index" true
+done
+python3 - "$SCEN/input/sub-04/qc.json" <<'EOPY'
+import json, sys
+path = sys.argv[1]
+qc = json.load(open(path))
+qc["data_no_dw_vols"] = 15
+json.dump(qc, open(path, "w"), indent=4)
+EOPY
+group_config "$SCEN/config.json" '{}' "$SCEN"/input/sub-0*
+( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run_squad.sh" ) \
+    > "$SCEN/log.txt" 2>&1
+check "a dropped volume splits the cohort" bash -c '
     [ "$(jq -r ".excluded[0].subjects | join(\",\")" \
          "'"$SCEN"'/output/squad/cohorts.json")" = "sub-04" ]'
-check "the reason names the b-values" bash -c '
-    jq -r ".excluded[0].reason" "'"$SCEN"'/output/squad/cohorts.json" | grep -q "b-values"'
+check "the reason names the volume count" bash -c '
+    jq -r ".excluded[0].reason" "'"$SCEN"'/output/squad/cohorts.json" \
+    | grep -q "number of diffusion-weighted volumes"'
 
-# ...and the study can be pooled anyway, by narrowing what the cohort key
-# compares -- for a difference this FSL turns out to tolerate.
-SCEN2="$ROOT/2f-narrowed-signature"
+SCEN2="$ROOT/2f-narrowed"
 mkdir -p "$SCEN2"
 jq '. + {signature_fields: "data_no_shells data_no_PE_dirs"}' "$SCEN/config.json" \
     > "$SCEN2/config.json"
@@ -277,8 +308,100 @@ check "narrowing signature_fields pools them again" bash -c '
 # The stub refuses it, exactly as the real tool would -- and the diagnostic runs.
 check "the refusal is diagnosed, not just reported" \
     grep -q "differs across subjects" "$SCEN2/log.txt"
-check "the diagnosis names the field" grep -q "data_unique_bvals" "$SCEN2/log.txt"
+check "the diagnosis names the field" grep -q "data_no_dw_vols" "$SCEN2/log.txt"
 check "and says how to split them" grep -q "signature_fields" "$SCEN2/log.txt"
+
+# ---------------------------------------------------------------------------
+# The one difference no rearrangement of the cohort key can pool: two sites
+# whose readout times differ in the sixth decimal, with their acqparams rows in
+# the other order. SQUAD compares that field exactly, so pooling them means
+# rewriting it -- opt-in, bounded, and disclosed everywhere.
+printf '\n--- 2g-pool-across-acquisition ---\n'
+SCEN="$ROOT/2g-pooled"
+mkdir -p "$SCEN"
+for index in 1 2; do
+    qc_dataset "$SCEN/input/sub-0$index" "sub-0$index" true true 0.0959097
+done
+for index in 3 4; do
+    qc_dataset "$SCEN/input/sub-0$index" "sub-0$index" true true 0.0965997
+    # ...and the other site lists its blip-down series first.
+    python3 - "$SCEN/input/sub-0$index/qc.json" <<'EOPY'
+import json, sys
+path = sys.argv[1]
+qc = json.load(open(path))
+qc["data_eddy_para"] = list(reversed(qc["data_eddy_para"]))
+json.dump(qc, open(path, "w"), indent=4)
+EOPY
+done
+group_config "$SCEN/config.json" '{"pool_across_acquisition": true}' "$SCEN"/input/sub-0*
+( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run_squad.sh" ) \
+    > "$SCEN/log.txt" 2>&1
+STATUS=$?
+check "the pooled group run exits 0" test "$STATUS" -eq 0
+[ "$STATUS" -eq 0 ] || tail -20 "$SCEN/log.txt"
+check "both sites pooled into one cohort" bash -c '
+    [ "$(jq -r ".chosen.n_subjects" "'"$SCEN"'/output/squad/cohorts.json")" = "4" ]'
+# The point of the whole exercise: FSL stops refusing.
+check "eddy_squad accepted the harmonised cohort" bash -c '
+    [ "$(jq -r ".data_no_subjects" "'"$SCEN"'/output/squad/group_db.json")" = "4" ]'
+check "the field that was rewritten is named" bash -c '
+    [ "$(jq -r ".chosen.harmonised.field" "'"$SCEN"'/output/squad/cohorts.json")" \
+      = "data_eddy_para" ]'
+check "both originals are recorded, per subject" bash -c '
+    [ "$(jq -r ".chosen.harmonised.per_subject | length" \
+         "'"$SCEN"'/output/squad/cohorts.json")" = "2" ]'
+check "the recorded originals are the site's own readout" bash -c '
+    jq -r ".chosen.harmonised.per_subject | to_entries[0].value | tostring" \
+        "'"$SCEN"'/output/squad/cohorts.json" | grep -qE "0.0959097|0.0965997"'
+check "the log warns that the databases no longer match the inputs" \
+    grep -q "pool_across_acquisition rewrote" "$SCEN/log.txt"
+check "the task page carries the warning" bash -c '
+    jq -r ".brainlife[] | select(.type==\"warning\") | .msg" "'"$SCEN"'/product.json" \
+    | grep -q "pool_across_acquisition"'
+check "and names the index the rewrite makes incomparable" bash -c '
+    jq -r ".brainlife[] | select(.type==\"warning\") | .msg" "'"$SCEN"'/product.json" \
+    | grep -q "qc_vox_displ_std"'
+check "the staged databases all carry one value" bash -c '
+    [ "$(for d in "'"$SCEN"'"/work/squad/subjects/*/; do
+             jq -c ".data_eddy_para" "$d/qc.json"; done | sort -u | wc -l)" = "1" ]'
+check "the input datasets were not touched" bash -c '
+    [ "$(for d in "'"$SCEN"'"/input/*/; do
+             jq -c ".data_eddy_para" "$d/qc.json"; done | sort -u | wc -l)" = "2" ]'
+
+# ...and the bound is real: different phase-encode vectors are a different
+# acquisition, and no amount of opting in makes them one.
+printf '\n--- 2h-harmonisation-refused ---\n'
+SCEN="$ROOT/2h-refused"
+mkdir -p "$SCEN"
+for index in 1 2; do
+    qc_dataset "$SCEN/input/sub-0$index" "sub-0$index" true
+done
+for index in 3 4; do
+    qc_dataset "$SCEN/input/sub-0$index" "sub-0$index" true
+    python3 - "$SCEN/input/sub-0$index/qc.json" <<'EOPY'
+import json, sys
+path = sys.argv[1]
+qc = json.load(open(path))
+readout = qc["data_eddy_para"][0][3]
+qc["data_eddy_para"] = [[1, 0, 0, readout], [-1, 0, 0, readout]]
+qc["data_unique_pes"] = [[1, 0, 0], [-1, 0, 0]]
+json.dump(qc, open(path, "w"), indent=4)
+EOPY
+done
+group_config "$SCEN/config.json" '{"pool_across_acquisition": true}' "$SCEN"/input/sub-0*
+( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run_squad.sh" ) \
+    > "$SCEN/log.txt" 2>&1
+STATUS=$?
+check "the task still succeeds on the larger cohort" test "$STATUS" -eq 0
+[ "$STATUS" -eq 0 ] || tail -20 "$SCEN/log.txt"
+check "left-right and anterior-posterior stay two cohorts" bash -c '
+    [ "$(jq -r ".chosen.n_subjects" "'"$SCEN"'/output/squad/cohorts.json")" = "2" ]'
+check "nothing was rewritten" bash -c '
+    [ "$(jq -r ".chosen.harmonised | length" \
+         "'"$SCEN"'/output/squad/cohorts.json")" = "0" ]'
+check "the refusal says why harmonisation was declined" bash -c '
+    jq -r ".excluded[0].reason" "'"$SCEN"'/output/squad/cohorts.json" \
+    | grep -q "not harmonised: the phase-encode vectors themselves differ"'
 
 printf '\n--- 3-grouping-variable-and-update ---\n'
 SCEN="$ROOT/3-grouping"

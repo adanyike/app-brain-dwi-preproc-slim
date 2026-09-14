@@ -175,18 +175,38 @@ study-wise eddy QC (SQUAD) across a whole cohort.
   easy to trip, because slice-to-volume correction depends on a GPU being visible
   and the susceptibility field on the subject having a reverse phase-encoded
   series. The group App buckets its inputs by signature, reports on the largest
-  cohort, and names who it left out and why. Volume counts are deliberately left
-  out: SQUAD pools those correctly, and excluding them would discard data for
-  nothing.
-- The signature compares the eddy **input** data as well as the output flags,
-  exactly. Newer FSL releases check the acquisition too -- `Inconsistency
-  detected in eddy input data in topup acquisition parameters!` is what a real
-  study hit -- so a key looser than that comparison pools subjects SQUAD then
-  rejects, failing the whole study instead of splitting one cohort. No rounding
-  with it: b-values of 1495 and 1500 are different cohorts, because they are
-  different to SQUAD. `signature_fields` narrows the comparison where an FSL
-  tolerates a difference, and a refusal the app did not predict is followed by a
-  field-by-field comparison of the staged subjects rather than a traceback.
+  cohort, and names who it left out and why.
+- The signature compares the eddy **input** data as well as the output flags, and
+  it compares each field the way `eddy_qc/SQUAD/squad_db.py` compares it, against
+  the first subject in the list, as SQUAD does. Five fields exactly
+  (`data_no_shells`, `data_no_PE_dirs`, `data_no_b0_vols`, `data_no_dw_vols`,
+  `data_eddy_para`) -- `Inconsistency detected in eddy input data in topup
+  acquisition parameters!` is what a real study hit. Two within SQUAD's own
+  tolerance: the shell b-values with `np.allclose(atol=20)` after a length check,
+  so b=1495 pools with b=1500 and b=1530 does not, and the voxel size with
+  `rtol=1e-2`. Two not at all, because SQUAD does not compare them:
+  `data_protocol` and `data_unique_pes` are reported when they differ -- the
+  group report is labelled from one subject -- and never split a cohort.
+- Mirroring that comparison matters in both directions. A key looser than SQUAD's
+  pools subjects it then rejects, failing the whole study instead of splitting one
+  cohort; a key stricter than SQUAD's splits a study it would have pooled, at the
+  same cost and with nothing said about it. `signature_fields` adjusts either way
+  -- drop a field your FSL tolerates, or name a tolerant one to compare it exactly
+  -- and a refusal the app did not predict is followed by a field-by-field
+  comparison of the staged subjects rather than a traceback.
+- `pool_across_acquisition` (off by default) is the way past the one difference no
+  signature can soften. Two sites whose readout times differ in the sixth decimal
+  are two cohorts to SQUAD, and the cross-site report it exists to produce cannot
+  be made. Set it and cohorts differing *only* in `data_eddy_para` are merged, by
+  rewriting that field in the App's own staged copies of the databases -- never in
+  the inputs, which stay the record of what was acquired. It is bounded: identical
+  phase-encode vectors, the same number of series, and readout times within
+  `pool_readout_tolerance` (0.05 s). Anything else is a different acquisition and
+  is refused, with the reason on the task page. And it is disclosed, which is the
+  price of the feature: `cohorts.json` records every subject's original value, the
+  log warns, and `product.json` names what it costs -- motion, outlier and CNR
+  indices do not depend on those parameters and stay comparable, the
+  distortion-derived `qc_vox_displ_std` does and does not.
 - The grouping variable is matched to subjects **by name** when given as a
   `participants.tsv`-style table, because `eddy_squad` matches by line position
   and a single excluded subject otherwise shifts every later value onto the wrong

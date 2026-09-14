@@ -257,14 +257,99 @@ class TestCohorts(StagingCase):
         self.assertIn("topup acquisition parameters", report["excluded"][0]["reason"])
         self.assertIn("0.1043", report["excluded"][0]["reason"])
 
-    def test_the_comparison_is_exact(self):
+    def test_a_b_value_five_apart_pools_because_squad_pools_it(self):
+        # squad_db.py compares the b-values with np.allclose(atol=20), so 1495
+        # and 1500 are one cohort to it. Splitting them here would refuse a
+        # study SQUAD accepts -- which is how a two-site study became two group
+        # reports of two subjects each.
         folders = [self.dataset("a", qc(), summary={"subject": "a"}),
                    self.dataset("b", qc(), summary={"subject": "b"}),
                    self.dataset("c", qc(data_unique_bvals=[1495, 3000]),
                                 summary={"subject": "c"})]
         report = self.run_staging(self.config(folders))
+        self.assertEqual(report["chosen"]["n_subjects"], 3)
+        self.assertEqual(report["excluded"], [])
+
+    def test_a_b_value_beyond_the_tolerance_still_splits(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"}),
+                   self.dataset("c", qc(data_unique_bvals=[1530, 3000]),
+                                summary={"subject": "c"})]
+        report = self.run_staging(self.config(folders))
         self.assertEqual(report["excluded"][0]["subjects"], ["c"])
         self.assertIn("shell b-values", report["excluded"][0]["reason"])
+        self.assertIn("more than SQUAD tolerates", report["excluded"][0]["reason"])
+
+    def test_a_voxel_size_within_one_percent_pools(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(data_vox_size=[2.01, 2.0, 2.0]),
+                                summary={"subject": "b"})]
+        self.assertEqual(self.run_staging(self.config(folders))["excluded"], [])
+
+    def test_a_voxel_size_beyond_it_does_not(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"}),
+                   self.dataset("c", qc(data_vox_size=[2.5, 2.0, 2.0]),
+                                summary={"subject": "c"})]
+        report = self.run_staging(self.config(folders))
+        self.assertEqual(report["excluded"][0]["subjects"], ["c"])
+        self.assertIn("voxel size", report["excluded"][0]["reason"])
+
+    def test_the_tolerance_is_measured_from_the_first_subject_as_squad_measures_it(self):
+        # 1490, 1500 and 1515 are each within 20 of a neighbour but the ends are
+        # 25 apart. SQUAD compares every subject against the first folder in the
+        # list, so that is where the line falls here too.
+        folders = [self.dataset("a", qc(data_unique_bvals=[1490, 3000]),
+                                summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"}),
+                   self.dataset("c", qc(data_unique_bvals=[1515, 3000]),
+                                summary={"subject": "c"})]
+        report = self.run_staging(self.config(folders))
+        self.assertEqual(report["chosen"]["subjects"], ["a", "b"])
+        self.assertEqual(report["excluded"][0]["subjects"], ["c"])
+
+    def test_the_protocol_squad_never_compares_does_not_split_a_cohort(self):
+        # Same volumes, distributed differently between the shells. squad_db.py
+        # does not compare data_protocol at all.
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(data_protocol=[[1500, 4], [3000, 12]]),
+                                summary={"subject": "b"})]
+        report = self.run_staging(self.config(folders))
+        self.assertEqual(report["chosen"]["n_subjects"], 2)
+        self.assertEqual(report["excluded"], [])
+
+    def test_but_it_is_disclosed_rather_than_passed_over_in_silence(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(data_protocol=[[1500, 4], [3000, 12]]),
+                                summary={"subject": "b"})]
+        disclosed = self.run_staging(self.config(folders))["chosen"]["disclosed_differences"]
+        self.assertEqual([d["field"] for d in disclosed], ["data_protocol"])
+        self.assertEqual(sorted(s for value in disclosed[0]["values"]
+                                for s in value["subjects"]), ["a", "b"])
+
+    def test_the_report_says_how_each_field_was_compared(self):
+        folders = [self.dataset("a", qc()), self.dataset("b", qc())]
+        comparison = self.run_staging(self.config(folders))["comparison"]
+        self.assertEqual(comparison["exact"], list(si.EXACT_FIELDS))
+        self.assertEqual(sorted(comparison["tolerant"]),
+                         ["data_unique_bvals", "data_vox_size"])
+        self.assertEqual(comparison["disclosed"], list(si.DISCLOSED_FIELDS))
+
+    def test_a_tolerant_field_named_in_signature_fields_is_compared_exactly(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"}),
+                   self.dataset("c", qc(data_unique_bvals=[1495, 3000]),
+                                summary={"subject": "c"})]
+        widened = list(si.EXACT_FIELDS) + ["data_unique_bvals"]
+        report = self.run_staging(self.config(
+            folders, signature_fields=" ".join(widened)))
+        self.assertEqual(report["excluded"][0]["subjects"], ["c"])
+        self.assertIn("shell b-values differs", report["excluded"][0]["reason"])
+        # ...and it is not then also reported as a tolerance gap.
+        self.assertNotIn("more than SQUAD tolerates", report["excluded"][0]["reason"])
+        self.assertEqual(report["comparison"]["tolerant"], {"data_vox_size":
+            {"atol": si.TOLERANT_FIELDS["data_vox_size"][0],
+             "rtol": si.TOLERANT_FIELDS["data_vox_size"][1]}})
 
     def test_signature_fields_can_narrow_what_is_compared(self):
         folders = [self.dataset("a", qc(), summary={"subject": "a"}),
@@ -442,6 +527,126 @@ class TestStaging(StagingCase):
     def test_a_complete_cohort_reports_nothing_missing(self):
         folders = [self.dataset("a", qc()), self.dataset("b", qc())]
         self.assertEqual(self.run_staging(self.config(folders))["missing_reports"], [])
+
+
+class TestPoolAcrossAcquisition(StagingCase):
+    """The opt-in way past the one difference no rearrangement of the key fixes.
+
+    Two sites run the same protocol; their readout times differ in the sixth
+    decimal and their acqparams rows are in the other order. squad_db.py
+    compares data_eddy_para exactly, so it refuses the study -- and no cohort key
+    that mirrors SQUAD can pool them. pool_across_acquisition rewrites the staged
+    copies, within stated bounds, and says so everywhere it can.
+    """
+
+    SITE_A = [[0, 1, 0, 0.0959097], [0, -1, 0, 0.0959097]]
+    SITE_B = [[0, -1, 0, 0.0965997], [0, 1, 0, 0.0965997]]
+
+    def two_sites(self, site_b=None):
+        site_b = self.SITE_B if site_b is None else site_b
+        return [self.dataset("a", qc(data_eddy_para=self.SITE_A),
+                             summary={"subject": "a"}),
+                self.dataset("b", qc(data_eddy_para=self.SITE_A),
+                             summary={"subject": "b"}),
+                self.dataset("c", qc(data_eddy_para=site_b), summary={"subject": "c"}),
+                self.dataset("d", qc(data_eddy_para=site_b), summary={"subject": "d"})]
+
+    def test_off_by_default_the_two_sites_are_two_cohorts(self):
+        report = self.run_staging(self.config(self.two_sites()))
+        self.assertEqual(report["chosen"]["n_subjects"], 2)
+        self.assertIn("topup acquisition parameters", report["excluded"][0]["reason"])
+        self.assertEqual(report["chosen"]["harmonised"], {})
+
+    def test_on_request_the_two_sites_become_one_cohort(self):
+        report = self.run_staging(self.config(self.two_sites(),
+                                              pool_across_acquisition=True))
+        self.assertEqual(report["chosen"]["n_subjects"], 4)
+        self.assertEqual(sorted(report["chosen"]["subjects"]), ["a", "b", "c", "d"])
+        self.assertEqual(report["excluded"], [])
+
+    def test_every_original_value_is_recorded(self):
+        report = self.run_staging(self.config(self.two_sites(),
+                                              pool_across_acquisition=True))
+        harmonised = report["chosen"]["harmonised"]
+        self.assertEqual(harmonised["field"], "data_eddy_para")
+        self.assertIn(harmonised["reference"], (self.SITE_A, self.SITE_B))
+        rewritten = harmonised["per_subject"]
+        self.assertEqual(sorted(rewritten), ["a", "b"] if harmonised["reference"]
+                         == self.SITE_B else ["c", "d"])
+        for original in rewritten.values():
+            self.assertNotEqual(original, harmonised["reference"])
+
+    def test_the_staged_copies_carry_the_reference_value_and_the_inputs_do_not(self):
+        report = self.run_staging(self.config(self.two_sites(),
+                                              pool_across_acquisition=True))
+        reference = report["chosen"]["harmonised"]["reference"]
+        with open(report["list_file"]) as fh:
+            folders = [line.strip() for line in fh if line.strip()]
+        self.assertEqual(len(folders), 4)
+        for folder in folders:
+            with open(os.path.join(folder, "qc.json")) as fh:
+                self.assertEqual(json.load(fh)["data_eddy_para"], reference)
+        # The input dataset is the record of what was acquired; it is read-only
+        # on brainlife and must stay untouched here too.
+        originals = set()
+        for name in ("a", "b", "c", "d"):
+            with open(os.path.join(self.root, "inputs", name, "qc.json")) as fh:
+                originals.add(json.dumps(json.load(fh)["data_eddy_para"]))
+        self.assertEqual(len(originals), 2)
+
+    def test_a_different_phase_encode_vector_is_refused(self):
+        # Left-right against anterior-posterior is a different acquisition, not
+        # the same one described differently.
+        other = [[1, 0, 0, 0.0959097], [-1, 0, 0, 0.0959097]]
+        report = self.run_staging(self.config(self.two_sites(other),
+                                              pool_across_acquisition=True))
+        self.assertEqual(report["chosen"]["n_subjects"], 2)
+        self.assertIn("not harmonised", report["excluded"][0]["reason"])
+        self.assertIn("phase-encode vectors themselves differ",
+                      report["excluded"][0]["reason"])
+
+    def test_a_readout_beyond_the_tolerance_is_refused(self):
+        far = [[0, 1, 0, 0.5], [0, -1, 0, 0.5]]
+        report = self.run_staging(self.config(self.two_sites(far),
+                                              pool_across_acquisition=True))
+        self.assertEqual(report["chosen"]["n_subjects"], 2)
+        self.assertIn("readout times differ by", report["excluded"][0]["reason"])
+        self.assertIn("pool_readout_tolerance", report["excluded"][0]["reason"])
+
+    def test_the_readout_tolerance_can_be_narrowed(self):
+        report = self.run_staging(self.config(self.two_sites(),
+                                              pool_across_acquisition=True,
+                                              pool_readout_tolerance=0.0001))
+        self.assertEqual(report["chosen"]["n_subjects"], 2)
+        self.assertIn("readout times differ by", report["excluded"][0]["reason"])
+
+    def test_a_cohort_that_differs_in_more_than_the_parameters_is_left_alone(self):
+        # The option is about one field. A subject with no slice-to-volume
+        # metrics is excluded as it always was, and nothing is rewritten.
+        folders = self.two_sites()
+        folders.append(self.dataset("e", qc(qc_s2v_params_flag=False,
+                                            data_eddy_para=self.SITE_A),
+                                    summary={"subject": "e"}))
+        report = self.run_staging(self.config(folders, pool_across_acquisition=True))
+        self.assertEqual(report["chosen"]["n_subjects"], 4)
+        self.assertEqual(report["excluded"][0]["subjects"], ["e"])
+        self.assertIn("slice-to-volume", report["excluded"][0]["reason"])
+        self.assertNotIn("not harmonised", report["excluded"][0]["reason"])
+
+    def test_a_differing_number_of_series_is_refused(self):
+        single = [[0, 1, 0, 0.0959097]]
+        report = self.run_staging(self.config(self.two_sites(single),
+                                              pool_across_acquisition=True))
+        self.assertEqual(report["chosen"]["n_subjects"], 2)
+        self.assertIn("2 and 1 acquisition parameter row(s)",
+                      report["excluded"][0]["reason"])
+
+    def test_nothing_to_harmonise_leaves_the_report_empty_handed(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"})]
+        report = self.run_staging(self.config(folders, pool_across_acquisition=True))
+        self.assertEqual(report["chosen"]["harmonised"], {})
+        self.assertEqual(report["chosen"]["n_subjects"], 2)
 
 
 class TestGroupingVariable(StagingCase):
