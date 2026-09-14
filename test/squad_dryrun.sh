@@ -43,7 +43,8 @@ qc = {
     "data_vox_size": [2.0, 2.0, 2.0],
     "data_protocol": [[1500, 8], [3000, 8]],
     "data_unique_pes": [[0, 1, 0], [0, -1, 0]],
-    "data_eddy_para": [[0, 1, 0, float(readout)], [0, -1, 0, float(readout)]],
+    # Flat, as eddy_quad writes it: each [x, y, z, readout] row laid end to end.
+    "data_eddy_para": [0.0, 1.0, 0.0, float(readout), 0.0, -1.0, 0.0, float(readout)],
     "qc_mot_abs": 0.3 + 0.1 * len(subject), "qc_mot_rel": 0.1,
     "qc_outliers_tot": 1.0 + len(subject), "qc_vox_displ_std": 0.7,
     "qc_params_flag": True, "qc_ol_flag": True, "qc_cnr_flag": True,
@@ -329,7 +330,9 @@ for index in 3 4; do
 import json, sys
 path = sys.argv[1]
 qc = json.load(open(path))
-qc["data_eddy_para"] = list(reversed(qc["data_eddy_para"]))
+rows = [qc["data_eddy_para"][i:i + 4]
+        for i in range(0, len(qc["data_eddy_para"]), 4)]
+qc["data_eddy_para"] = [n for row in reversed(rows) for n in row]
 json.dump(qc, open(path, "w"), indent=4)
 EOPY
 done
@@ -382,8 +385,8 @@ for index in 3 4; do
 import json, sys
 path = sys.argv[1]
 qc = json.load(open(path))
-readout = qc["data_eddy_para"][0][3]
-qc["data_eddy_para"] = [[1, 0, 0, readout], [-1, 0, 0, readout]]
+readout = qc["data_eddy_para"][3]
+qc["data_eddy_para"] = [1.0, 0.0, 0.0, readout, -1.0, 0.0, 0.0, readout]
 qc["data_unique_pes"] = [[1, 0, 0], [-1, 0, 0]]
 json.dump(qc, open(path, "w"), indent=4)
 EOPY

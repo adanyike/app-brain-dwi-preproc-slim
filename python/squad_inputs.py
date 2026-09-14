@@ -459,18 +459,33 @@ def disclosed_differences(members: Sequence[dict]) -> List[dict]:
 def acqp_rows(value: Any) -> List[Tuple[Tuple[float, ...], float]] | None:
     """``data_eddy_para`` as [(phase-encode vector, readout time)], or None.
 
-    None means it is not the table topup writes -- in which case nothing here
-    can say what differs between two of them, and harmonising is out.
+    QUAD writes the acqparams table **flat** -- one row of [x, y, z, readout]
+    after another in a single list of 4N numbers, which is what a real qc.json
+    carries. A nested list of rows is accepted too, since that is the shape the
+    same table takes anywhere it has been reshaped before reaching us, and
+    reading only one of the two would be reading the format we invented rather
+    than the one eddy_quad writes.
+
+    None means it is neither, in which case nothing here can say what differs
+    between two of them, and harmonising is out.
     """
     if not isinstance(value, (list, tuple)) or not value:
         return None
-    rows = []
-    for row in value:
-        numbers = numbers_of(row)
-        if numbers is None or len(numbers) < 4:
-            return None
-        rows.append((tuple(numbers[:3]), numbers[3]))
-    return rows
+
+    if all(isinstance(row, (list, tuple)) for row in value):
+        rows = []
+        for row in value:
+            numbers = numbers_of(row)
+            if numbers is None or len(numbers) < 4:
+                return None
+            rows.append((tuple(numbers[:3]), numbers[3]))
+        return rows
+
+    numbers = numbers_of(value)
+    if numbers is None or len(numbers) < 4 or len(numbers) % 4:
+        return None
+    return [(tuple(numbers[index:index + 3]), numbers[index + 3])
+            for index in range(0, len(numbers), 4)]
 
 
 def harmonisable(reference: Any, other: Any, tolerance: float) -> str:

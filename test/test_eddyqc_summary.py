@@ -16,7 +16,8 @@ FULL = {
     "data_vox_size": [2.0, 2.0, 2.0],
     "data_protocol": [[1500, 8], [3000, 8]],
     "data_unique_pes": [[0, 1, 0], [0, -1, 0]],
-    "data_eddy_para": [[0, 1, 0, 0.0959], [0, -1, 0, 0.0959]],
+    # Flat, as eddy_quad writes it: one [x, y, z, readout] row after another.
+    "data_eddy_para": [0.0, 1.0, 0.0, 0.0959, 0.0, -1.0, 0.0, 0.0959],
     "qc_mot_abs": 0.42, "qc_mot_rel": 0.19,
     "qc_params_flag": True, "qc_s2v_params_flag": True, "qc_field_flag": True,
     "qc_ol_flag": True, "qc_cnr_flag": True, "qc_rss_flag": False,
@@ -75,7 +76,7 @@ class TestSignature(unittest.TestCase):
         # What a real study hit: identical eddy options, a different readout
         # time. Newer FSL compares the eddy input data and refuses the study
         # over exactly this.
-        other = without(data_eddy_para=[[0, 1, 0, 0.1043], [0, -1, 0, 0.1043]])
+        other = without(data_eddy_para=[0.0, 1.0, 0.0, 0.1043, 0.0, -1.0, 0.0, 0.1043])
         self.assertNotEqual(self.signature(FULL), self.signature(other))
 
     def test_the_fields_squad_tolerates_are_not_in_the_key_at_all(self):

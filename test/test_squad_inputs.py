@@ -15,7 +15,8 @@ BASE = {
     "data_vox_size": [2.0, 2.0, 2.0],
     "data_protocol": [[1500, 8], [3000, 8]],
     "data_unique_pes": [[0, 1, 0], [0, -1, 0]],
-    "data_eddy_para": [[0, 1, 0, 0.0959], [0, -1, 0, 0.0959]],
+    # Flat, as eddy_quad writes it: one [x, y, z, readout] row after another.
+    "data_eddy_para": [0.0, 1.0, 0.0, 0.0959, 0.0, -1.0, 0.0, 0.0959],
     "qc_mot_abs": 0.4, "qc_mot_rel": 0.2, "qc_outliers_tot": 1.0,
     "qc_params_flag": True, "qc_s2v_params_flag": True, "qc_field_flag": True,
     "qc_ol_flag": True, "qc_cnr_flag": True, "qc_rss_flag": False,
@@ -247,7 +248,7 @@ class TestCohorts(StagingCase):
     def test_differing_acquisition_parameters_split_the_cohort(self):
         # The real failure: same eddy options, different readout time. SQUAD
         # compares the eddy input data and refuses the study over it.
-        other = [[0, 1, 0, 0.1043], [0, -1, 0, 0.1043]]
+        other = [0.0, 1.0, 0.0, 0.1043, 0.0, -1.0, 0.0, 0.1043]
         folders = [self.dataset("a", qc(), summary={"subject": "a"}),
                    self.dataset("b", qc(), summary={"subject": "b"}),
                    self.dataset("c", qc(data_eddy_para=other),
@@ -539,8 +540,11 @@ class TestPoolAcrossAcquisition(StagingCase):
     copies, within stated bounds, and says so everywhere it can.
     """
 
-    SITE_A = [[0, 1, 0, 0.0959097], [0, -1, 0, 0.0959097]]
-    SITE_B = [[0, -1, 0, 0.0965997], [0, 1, 0, 0.0965997]]
+    # The real values and the real shape, from a two-site study: flat, and
+    # with the two sites listing their blip-up and blip-down rows in the
+    # opposite order.
+    SITE_A = [0.0, 1.0, 0.0, 0.0959097, 0.0, -1.0, 0.0, 0.0959097]
+    SITE_B = [0.0, -1.0, 0.0, 0.0965997, 0.0, 1.0, 0.0, 0.0965997]
 
     def two_sites(self, site_b=None):
         site_b = self.SITE_B if site_b is None else site_b
@@ -550,6 +554,32 @@ class TestPoolAcrossAcquisition(StagingCase):
                              summary={"subject": "b"}),
                 self.dataset("c", qc(data_eddy_para=site_b), summary={"subject": "c"}),
                 self.dataset("d", qc(data_eddy_para=site_b), summary={"subject": "d"})]
+
+    def test_the_flat_table_eddy_quad_actually_writes_is_read(self):
+        # The shape a real qc.json carries: 4N numbers, not N rows of 4. Reading
+        # only the nested form made harmonisation refuse every real study with
+        # "not a table of [x, y, z, readout] rows" -- a parser failure wearing
+        # the words of an acquisition difference.
+        self.assertEqual(
+            si.acqp_rows([0.0, -1.0, 0.0, 0.0959097, 0.0, 1.0, 0.0, 0.0959097]),
+            [((0.0, -1.0, 0.0), 0.0959097), ((0.0, 1.0, 0.0), 0.0959097)])
+
+    def test_the_nested_table_is_read_too(self):
+        self.assertEqual(
+            si.acqp_rows([[0.0, -1.0, 0.0, 0.0959097], [0.0, 1.0, 0.0, 0.0959097]]),
+            [((0.0, -1.0, 0.0), 0.0959097), ((0.0, 1.0, 0.0), 0.0959097)])
+
+    def test_something_that_is_not_an_acqparams_table_is_refused(self):
+        for value in ([0.0, 1.0, 0.0], [0.0, 1.0, 0.0, 0.09, 0.0], "axial", [], None):
+            self.assertIsNone(si.acqp_rows(value), value)
+
+    def test_the_real_two_site_difference_harmonises(self):
+        # MCG vs UMN, exactly as their qc.json carries it: the same two
+        # phase-encode vectors in the opposite row order, and readout times
+        # 0.00069 s apart.
+        mcg = [0.0, -1.0, 0.0, 0.0959097, 0.0, 1.0, 0.0, 0.0959097]
+        umn = [0.0, 1.0, 0.0, 0.0965997, 0.0, -1.0, 0.0, 0.0965997]
+        self.assertEqual(si.harmonisable(mcg, umn, 0.05), "")
 
     def test_off_by_default_the_two_sites_are_two_cohorts(self):
         report = self.run_staging(self.config(self.two_sites()))
@@ -597,7 +627,7 @@ class TestPoolAcrossAcquisition(StagingCase):
     def test_a_different_phase_encode_vector_is_refused(self):
         # Left-right against anterior-posterior is a different acquisition, not
         # the same one described differently.
-        other = [[1, 0, 0, 0.0959097], [-1, 0, 0, 0.0959097]]
+        other = [1.0, 0.0, 0.0, 0.0959097, -1.0, 0.0, 0.0, 0.0959097]
         report = self.run_staging(self.config(self.two_sites(other),
                                               pool_across_acquisition=True))
         self.assertEqual(report["chosen"]["n_subjects"], 2)
@@ -606,7 +636,7 @@ class TestPoolAcrossAcquisition(StagingCase):
                       report["excluded"][0]["reason"])
 
     def test_a_readout_beyond_the_tolerance_is_refused(self):
-        far = [[0, 1, 0, 0.5], [0, -1, 0, 0.5]]
+        far = [0.0, 1.0, 0.0, 0.5, 0.0, -1.0, 0.0, 0.5]
         report = self.run_staging(self.config(self.two_sites(far),
                                               pool_across_acquisition=True))
         self.assertEqual(report["chosen"]["n_subjects"], 2)
@@ -634,7 +664,7 @@ class TestPoolAcrossAcquisition(StagingCase):
         self.assertNotIn("not harmonised", report["excluded"][0]["reason"])
 
     def test_a_differing_number_of_series_is_refused(self):
-        single = [[0, 1, 0, 0.0959097]]
+        single = [0.0, 1.0, 0.0, 0.0959097]
         report = self.run_staging(self.config(self.two_sites(single),
                                               pool_across_acquisition=True))
         self.assertEqual(report["chosen"]["n_subjects"], 2)
