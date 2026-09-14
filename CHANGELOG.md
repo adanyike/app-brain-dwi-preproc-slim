@@ -178,7 +178,9 @@ study-wise eddy QC (SQUAD) across a whole cohort.
   cohort, and names who it left out and why.
 - The signature compares the eddy **input** data as well as the output flags, and
   it compares each field the way `eddy_qc/SQUAD/squad_db.py` compares it, against
-  the first subject in the list, as SQUAD does. Five fields exactly
+  the first subject in the list, as SQUAD does. Read from the source of FSL
+  6.0.7.23 and confirmed there against a real two-site study; an older release
+  compared none of it, so the rules below are a property of the FSL you run. Five fields exactly
   (`data_no_shells`, `data_no_PE_dirs`, `data_no_b0_vols`, `data_no_dw_vols`,
   `data_eddy_para`) -- `Inconsistency detected in eddy input data in topup
   acquisition parameters!` is what a real study hit. Two within SQUAD's own

@@ -245,7 +245,9 @@ an independently launched task, so that is easy to trip:
 Newer FSL releases compare the eddy **input** data as well, and refuse the study
 with `Inconsistency detected in eddy input data in <field>!` when subjects
 disagree on the acquisition. Not every field, and not all of them the same way —
-`eddy_qc/SQUAD/squad_db.py` compares each subject against the first in the list:
+`eddy_qc/SQUAD/squad_db.py` compares each subject against the first in the list.
+As of **FSL 6.0.7.23**, where this was read from the source and confirmed against
+a real two-site run:
 
 | Field | How SQUAD compares it |
 |---|---|
@@ -274,8 +276,19 @@ field that differs, with both values — rather than failing on subject 37. Run 
 again with `cohort` set to another signature to report on that one too, or set
 `require_homogeneous` to refuse the split instead of choosing.
 
-If your FSL turns out to compare something differently, `signature_fields` (a
-list of `data_*` field names) is the adjustment in both directions: drop a field
+These rules are a property of the FSL you run, not of the format: an older release
+compared none of this and pooled anything, which is why a study that ran years ago
+can start splitting on a difference that was always there. Check your own copy
+before trusting the table above — the whole comparison is a dozen lines:
+
+```bash
+FSL_PY="${FSLDIR:-/opt/fsl}/bin/python"
+grep -n 'allclose\|Inconsistency detected in eddy input data' \
+    "$("$FSL_PY" -c 'import eddy_qc.SQUAD.squad_db as m; print(m.__file__)')"
+```
+
+If your FSL compares something differently, `signature_fields` (a list of
+`data_*` field names) is the adjustment in both directions: drop a field
 to stop splitting on it, or name `data_unique_bvals` / `data_vox_size` there to
 compare it exactly instead of within the tolerance. And if a group run is refused
 anyway — a future release comparing something this app does not — the failure is
