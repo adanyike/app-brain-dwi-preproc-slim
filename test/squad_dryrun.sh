@@ -442,6 +442,31 @@ check "and the updated reports" bash -c '
     jq -r ".brainlife[].msg // empty" "'"$SCEN"'/product.json" \
     | grep -q "Updated 4 single-subject report"'
 
+# --- named classes are encoded, because eddy_squad can only read numbers ---
+SCEN2="$ROOT/3f-named-groups"
+mkdir -p "$SCEN2"
+printf 'participant_id\tsite\n' > "$SCEN2/participants.tsv"
+printf 'sub-01\tMCG\nsub-02\tUMN\nsub-03\tMCG\nsub-04\tUMN\n' >> "$SCEN2/participants.tsv"
+jq --arg v "$SCEN2/participants.tsv" '.grouping_variable = $v | .variable_name = "site"' \
+    "$SCEN/config.json" > "$SCEN2/config.json"
+( cd "$SCEN2" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run_squad.sh" ) \
+    > "$SCEN2/log.txt" 2>&1
+STATUS=$?
+check "a table of class names runs to completion" test "$STATUS" -eq 0
+[ "$STATUS" -eq 0 ] || tail -20 "$SCEN2/log.txt"
+check "eddy_squad was handed numbers, not names" bash -c '
+    ! grep -qE "^(MCG|UMN)$" "'"$SCEN2"'/output/squad/grouping_variable.txt"'
+check "and did not refuse the column" bash -c '
+    ! grep -q "Cannot convert string" "'"$SCEN2"'/log.txt"'
+check "the codes follow the class names, sorted" bash -c '
+    [ "$(tail -n +3 "'"$SCEN2"'/output/squad/grouping_variable.txt" | tr -d "[:space:]")" \
+      = "0101" ]'
+check "the mapping is recorded" bash -c '
+    [ "$(jq -r ".variable.encoding | to_entries | map(.key + \"=\" + .value) | join(\",\")" \
+         "'"$SCEN2"'/output/squad/cohorts.json")" = "0=MCG,1=UMN" ]'
+check "and explained on the task page" bash -c '
+    jq -r ".brainlife[].msg // empty" "'"$SCEN2"'/product.json" | grep -q "0 = MCG; 1 = UMN"'
+
 # --- a table missing a subject is refused before eddy_squad runs ---
 SCEN2="$ROOT/3b-incomplete-variable"
 mkdir -p "$SCEN2"

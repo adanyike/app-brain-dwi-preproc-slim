@@ -459,6 +459,15 @@ def cmd_eddy_squad(argv):
         if len(lines) - 2 != len(folders):
             sys.exit("eddy_squad: the grouping variable has %d values for %d subjects"
                      % (len(lines) - 2, len(folders)))
+        # squad.py reads this with np.genfromtxt(gVar, dtype=None, names=True),
+        # so every value has to parse as one numeric type. A class name gets as
+        # far as "Cannot convert string 'MCG'" and takes the run down before a
+        # plot is drawn -- which is why the app encodes names to integers.
+        for value in lines[2:]:
+            try:
+                float(value)
+            except ValueError:
+                sys.exit("ValueError: Cannot convert string '%s'" % value)
 
     first = databases[0]
     os.makedirs(outdir, exist_ok=True)

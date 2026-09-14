@@ -140,6 +140,21 @@ class TestMessages(unittest.TestCase):
         warnings = " ".join(messages(build(db=GROUP_DB), "warning"))
         self.assertNotIn("pool_across_acquisition", warnings)
 
+    def test_says_what_the_encoded_group_codes_mean(self):
+        # The report's axes say 0 and 1 because eddy_squad only reads numbers;
+        # the task page is where a reader finds out which site is which.
+        cohorts = dict(COHORTS, variable={
+            "name": "site", "continuous": False, "source": "table 'participants.tsv'",
+            "encoding": {"0": "MCG", "1": "UMN"}})
+        text = " ".join(messages(build(cohorts=cohorts, db=GROUP_DB)))
+        self.assertIn("0 = MCG; 1 = UMN", text)
+
+    def test_an_unencoded_variable_says_nothing_about_codes(self):
+        cohorts = dict(COHORTS, variable={"name": "age", "continuous": True,
+                                          "source": "table", "encoding": {}})
+        self.assertNotIn("encoded as numbers",
+                         " ".join(messages(build(cohorts=cohorts, db=GROUP_DB))))
+
     def test_reports_the_grouping_variable(self):
         cohorts = dict(COHORTS, variable={"name": "age", "continuous": True,
                                           "source": "table 'participants.tsv'"})

@@ -651,6 +651,42 @@ def looks_like_squad_file(path: str) -> bool:
     return len(lines) > 2 and lines[1] in ("0", "1")
 
 
+def encode_values(values: Sequence[str], continuous: bool, name: str
+                  ) -> Tuple[List[str], Dict[str, str]]:
+    """(values eddy_squad can read, {code: original name}).
+
+    SQUAD reads the grouping file with ``np.genfromtxt(gVar, dtype=None,
+    names=True)``, so every line of the column has to parse as one numeric
+    type. A site name gets as far as ``ValueError: Cannot convert string
+    'MCG'`` and takes the whole run down before a plot is drawn -- so names are
+    encoded to integers here, and the mapping is published rather than left in
+    the analyst's head.
+
+    Values that are already numeric are passed through untouched: an existing
+    file of 0s and 1s must reach SQUAD exactly as it was written, not renumbered
+    behind the author's back.
+
+    Classes are numbered in sorted order, so the same table yields the same
+    codes on every run, whatever order brainlife staged the subjects in.
+    """
+    if all(as_number(value) is not None for value in values):
+        return list(values), {}
+
+    names = sorted({str(value) for value in values})
+    if continuous:
+        raise StagingError(
+            "the grouping variable '%s' is marked continuous, but %d of its "
+            "values are not numbers (%s). A regression needs numbers: unset "
+            "variable_is_continuous to treat them as classes, or give the "
+            "column numeric values."
+            % (name or "?", sum(1 for v in values if as_number(v) is None),
+               ", ".join(names[:6]) + ("..." if len(names) > 6 else "")))
+
+    codes = {label: str(index) for index, label in enumerate(names)}
+    return ([codes[str(value)] for value in values],
+            {code: label for label, code in codes.items()})
+
+
 def write_variable_file(path: str, name: str, continuous: bool,
                         members: Sequence[dict], out_path: str) -> dict:
     """Write SQUAD's grouping file for this cohort, in list order.
@@ -669,10 +705,16 @@ def write_variable_file(path: str, name: str, continuous: bool,
                 "are matched by position, so the counts must agree -- or supply "
                 "a table with a subject column instead, which is matched by name."
                 % (path, len(values), len(members)))
-        shutil.copyfile(path, out_path)
+        encoded, encoding = encode_values(values, lines[1] == "1", lines[0])
+        if encoding:
+            with open(out_path, "w") as fh:
+                fh.write("%s\n%s\n" % (lines[0], lines[1]))
+                fh.write("".join("%s\n" % value for value in encoded))
+        else:
+            shutil.copyfile(path, out_path)
         return {"name": lines[0], "continuous": lines[1] == "1",
                 "source": "eddy_squad format file, matched by position",
-                "n_values": len(values), "missing": []}
+                "n_values": len(values), "missing": [], "encoding": encoding}
 
     column, table = read_variable_table(path)
     missing = [m["label"] for m in members
@@ -685,12 +727,13 @@ def write_variable_file(path: str, name: str, continuous: bool,
             % (len(missing), ", ".join(missing[:10]) + ("..." if len(missing) > 10 else "")))
 
     values = [table.get(m["subject"]) or table.get(m["label"]) for m in members]
+    encoded, encoding = encode_values(values, continuous, name or column)
     with open(out_path, "w") as fh:
         fh.write("%s\n%s\n" % (name or column, "1" if continuous else "0"))
-        fh.write("".join("%s\n" % value for value in values))
+        fh.write("".join("%s\n" % value for value in encoded))
     return {"name": name or column, "continuous": continuous,
             "source": "table '%s', matched by subject name" % os.path.basename(path),
-            "n_values": len(values), "missing": []}
+            "n_values": len(values), "missing": [], "encoding": encoding}
 
 
 # ------------------------------------------------------------------ stage ----

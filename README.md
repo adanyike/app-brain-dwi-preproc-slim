@@ -334,7 +334,7 @@ python3 python/eddyqc_summary.py --qc-json <task>/output/qc/eddy_quad/qc.json \
 | Parameter | Default | Meaning |
 |---|---|---|
 | `eddyqc` | — | The per-subject eddy QC datasets. A path to a `qc.json`, to any folder holding one (`eddyqc/`, an archived `qc` dataset, or an older task's `output/qc/eddy_quad/`), or a list of either |
-| `grouping_variable` | — | A `participants.tsv`-style table with a subject column and one value column, matched **by subject name**; or a file already in `eddy_squad`'s own format, matched by position |
+| `grouping_variable` | — | A `participants.tsv`-style table with a subject column and one value column, matched **by subject name**; or a file already in `eddy_squad`'s own format, matched by position. Class names (`MCG`, `UMN`) are encoded to integers, since SQUAD reads the column with numpy |
 | `variable_name` / `variable_is_continuous` | column name / `false` | Label for the variable, and whether to draw scatter plots with a regression fit (continuous) or violin plots per class (categorical) |
 | `update_single_subject_reports` | `true` | Also rewrite each subject's own report with study-wise context. Needs that subject's `qc.pdf` among the inputs |
 | `cohort` | largest | The signature (or its short hash) of the cohort to report on |
@@ -350,6 +350,17 @@ matches values to subjects by line position, which silently attributes one
 subject's value to another as soon as a subject is excluded from the cohort.
 Supplying a table with a subject column lets the App order the values to match
 the subject list it actually staged, and refuse when a value is missing.
+
+The values themselves may be class **names**. `eddy_squad` cannot read them — it
+parses the column with `np.genfromtxt(gVar, dtype=None, names=True)`, so `MCG`
+raises `ValueError: Cannot convert string 'MCG'` before a plot is drawn — so the
+App encodes named classes to integers in sorted order, hands SQUAD the numbers,
+and publishes the mapping in `cohorts.json` (`variable.encoding`) and on the task
+page. The report's group axes are therefore labelled `0` and `1`; the task page
+says which is which. Values that are already numeric are passed through
+untouched, never renumbered. A variable marked `variable_is_continuous` must be
+numeric, since a regression through encoded class names would be a number
+without a meaning; that combination is refused.
 
 ## Configuration
 

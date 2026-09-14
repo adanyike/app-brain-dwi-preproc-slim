@@ -212,6 +212,15 @@ study-wise eddy QC (SQUAD) across a whole cohort.
   and a single excluded subject otherwise shifts every later value onto the wrong
   person. A file already in SQUAD's format is passed through, and refused when
   its value count does not match the cohort.
+- Class names are accepted as grouping values and encoded to integers. SQUAD
+  reads the column with `np.genfromtxt(gVar, dtype=None, names=True)`, so a site
+  name raises `ValueError: Cannot convert string 'MCG'` and takes the run down
+  before a plot is drawn. Names are numbered in sorted order -- stable across
+  runs, whatever order brainlife staged the subjects in -- and the mapping is
+  published in `cohorts.json` and on the task page, because the report's axes can
+  then only say 0 and 1. Numeric values are passed through untouched rather than
+  renumbered, and names combined with `variable_is_continuous` are refused rather
+  than regressed through.
 - Single-subject reports are updated with the group's context by default
   (`update_single_subject_reports`). The QC databases are copied into the work
   directory first, since brainlife stages inputs read-only and `eddy_squad -u`

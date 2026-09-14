@@ -204,6 +204,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                variable.get("source", "?"),
                "Scatter" if variable.get("continuous") else "Violin")})
 
+    # eddy_squad can only read numbers, so named classes were encoded. The
+    # report's axes therefore say 0 and 1; this is what they mean.
+    encoding = variable.get("encoding") or {}
+    if encoding:
+        messages.append({"type": "info", "msg":
+            "The '%s' classes were encoded as numbers, because eddy_squad reads "
+            "the grouping file with numpy and a name raises \"Cannot convert "
+            "string\". The group axes in the report are labelled with these "
+            "codes: %s."
+            % (variable.get("name", "?"),
+               "; ".join("%s = %s" % (code, label)
+                         for code, label in sorted(encoding.items())))})
+
     missing_reports = cohorts.get("missing_reports") or []
     if missing_reports:
         messages.append({"type": "warning", "msg":

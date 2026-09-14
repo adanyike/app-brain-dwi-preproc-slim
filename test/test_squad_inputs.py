@@ -680,6 +680,20 @@ class TestPoolAcrossAcquisition(StagingCase):
 
 
 class TestGroupingVariable(StagingCase):
+    def variable_run(self, table_text, expect=0, **extra):
+        """Stage two subjects against a participants-style table."""
+        path = os.path.join(self.root, "participants.tsv")
+        with open(path, "w") as fh:
+            fh.write(table_text)
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"})]
+        return self.run_staging(
+            self.config(folders, grouping_variable=path, **extra), expect=expect)
+
+    def variable_lines(self):
+        with open(os.path.join(self.work, "variable.txt")) as fh:
+            return [line.strip() for line in fh if line.strip()]
+
     def two_subjects(self):
         return [self.dataset("a", qc(), summary={"subject": "sub-01"}),
                 self.dataset("b", qc(), summary={"subject": "sub-02"})]
@@ -753,6 +767,47 @@ class TestGroupingVariable(StagingCase):
         self.assertEqual(report["chosen"]["subjects"], ["sub-01", "sub-02"])
         with open(report["variable_file"]) as fh:
             self.assertEqual(fh.read().split(), ["group", "0", "0", "1"])
+
+    def test_named_classes_are_encoded_because_squad_reads_numbers(self):
+        # eddy_squad does np.genfromtxt(gVar, dtype=None, names=True), so a site
+        # name raises "Cannot convert string 'MCG'" before a plot is drawn.
+        report = self.variable_run("participant_id\tsite\n"
+                                   "a\tMCG\nb\tUMN\n")
+        self.assertEqual(report["variable"]["encoding"], {"0": "MCG", "1": "UMN"})
+        self.assertEqual(self.variable_lines(), ["site", "0", "0", "1"])
+
+    def test_the_codes_are_sorted_so_they_are_stable_across_runs(self):
+        report = self.variable_run("participant_id\tsite\n"
+                                   "a\tUMN\nb\tMCG\n")
+        self.assertEqual(report["variable"]["encoding"], {"0": "MCG", "1": "UMN"})
+        # a is UMN, b is MCG -- the codes follow the class name, not the row.
+        self.assertEqual(self.variable_lines()[2:], ["1", "0"])
+
+    def test_numbers_are_passed_through_untouched_not_renumbered(self):
+        # An existing table of 0s and 1s has to reach SQUAD exactly as written.
+        report = self.variable_run("participant_id\tgroup\na\t7\nb\t9\n")
+        self.assertEqual(report["variable"]["encoding"], {})
+        self.assertEqual(self.variable_lines()[2:], ["7", "9"])
+
+    def test_a_continuous_variable_of_names_is_refused_not_encoded(self):
+        # Encoding names to 0/1 and fitting a regression through them would be
+        # a meaningless number rather than an error.
+        report = self.variable_run("participant_id\tsite\na\tMCG\nb\tUMN\n",
+                                   expect=1, variable_is_continuous=True)
+        self.assertIn("marked continuous", report["error"])
+        self.assertIn("MCG", report["error"])
+
+    def test_a_squad_format_file_of_names_is_encoded_too(self):
+        # That path copies the file through verbatim, which for a file of names
+        # would hand FSL the same crash.
+        path = os.path.join(self.root, "variable.txt")
+        with open(path, "w") as fh:
+            fh.write("site\n0\nMCG\nUMN\n")
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"})]
+        report = self.run_staging(self.config(folders, grouping_variable=path))
+        self.assertEqual(report["variable"]["encoding"], {"0": "MCG", "1": "UMN"})
+        self.assertEqual(self.variable_lines(), ["site", "0", "0", "1"])
 
     def test_a_missing_variable_file_is_named(self):
         report = self.run_staging(
