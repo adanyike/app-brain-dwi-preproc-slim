@@ -560,6 +560,41 @@ check "no updated reports are published" bash -c '
 check "the task page still reports the cohort" bash -c '
     jq -r ".brainlife[].msg // empty" "'"$SCEN4"'/product.json" | grep -q "Pooled 4 subject"'
 
+# --- a warning on stderr is not a failed import ---
+# A successful import may print on its way: numexpr, which pandas drags in,
+# announces "nthreads cannot be larger than NUMEXPR_MAX_THREADS (64)" on any
+# host with more cores than that and carries on. Reading stderr as failure
+# skipped --update on every large machine and blamed a module that was present.
+SCEN5="$ROOT/3g-stderr-on-success"
+mkdir -p "$SCEN5/fsl/bin" "$SCEN5/fakemods/eddy_qc/SQUAD"
+for module in seaborn pandas matplotlib; do : > "$SCEN5/fakemods/$module.py"; done
+: > "$SCEN5/fakemods/eddy_qc/__init__.py"
+: > "$SCEN5/fakemods/eddy_qc/SQUAD/__init__.py"
+cat > "$SCEN5/fakemods/eddy_qc/SQUAD/squad_update.py" <<'EOPY'
+import sys
+sys.stderr.write('Error.  nthreads cannot be larger than environment '
+                 'variable "NUMEXPR_MAX_THREADS" (64)\n')
+EOPY
+cat > "$SCEN5/fsl/bin/python" <<EOSH
+#!/bin/sh
+PYTHONPATH="$SCEN5/fakemods:\${PYTHONPATH:-}" exec python3 "\$@"
+EOSH
+chmod +x "$SCEN5/fsl/bin/python"
+cp -r "$SCEN/input" "$SCEN5/input"
+group_config "$SCEN5/config.json" '{"update_single_subject_reports": true}' \
+    "$SCEN5"/input/sub-0*
+( cd "$SCEN5" && PATH="$BIN:$PATH" APP_DIR="$APP" FSLDIR="$SCEN5/fsl" \
+    bash "$APP/run_squad.sh" ) > "$SCEN5/log.txt" 2>&1
+STATUS=$?
+check "a noisy but successful import still runs" test "$STATUS" -eq 0
+[ "$STATUS" -eq 0 ] || tail -20 "$SCEN5/log.txt"
+check "the update was not skipped over a warning" bash -c '
+    ! grep -q "not updating the single-subject reports" "'"$SCEN5"'/log.txt"'
+check "eddy_squad was given --update" bash -c '
+    grep -q "running: eddy_squad.*--update" "'"$SCEN5"'/log.txt"'
+check "and the reports were actually collected" bash -c '
+    [ "$(ls "'"$SCEN5"'"/output/squad/updated/*_qc_updated.pdf 2>/dev/null | wc -l)" = "4" ]'
+
 printf '\n--- 4-unusable-inputs ---\n'
 SCEN="$ROOT/4-unusable"
 mkdir -p "$SCEN/input/empty"

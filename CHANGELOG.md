@@ -233,7 +233,15 @@ study-wise eddy QC (SQUAD) across a whole cohort.
   absent. The library is checked by importing `eddy_qc.SQUAD.squad_update` itself
   rather than by guessing its name, which has changed between releases, and the
   Dockerfile installs `PyPDF2<3` into FSL's interpreter (not the system one,
-  which is not what eddy_squad runs under).
+  which is not what eddy_squad runs under). That probe is judged by its **exit
+  status**, never by whether it printed anything: a successful import is entitled
+  to write to stderr on the way, and one does -- numexpr, pulled in by pandas,
+  announces `nthreads cannot be larger than environment variable
+  "NUMEXPR_MAX_THREADS" (64)` on any host with more cores than that and carries
+  on. Reading that as a failure skipped the update step on every machine with
+  more than 64 cores and blamed a dependency that was present. `setup_threads`
+  now exports `NUMEXPR_MAX_THREADS` as well, clamped to numexpr's own ceiling of
+  64, so the notice stops appearing mid-run where it reads like an error.
 - FSL 6.0.7.x cannot run that step at all: `squad_update` hands `ref_page` an
   empty list where the eddy parameters belong, and it dies there on every run,
   *after* writing the group database. The image fixes it -- the build guards
