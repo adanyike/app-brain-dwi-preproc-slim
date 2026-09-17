@@ -579,10 +579,20 @@ class TestPoolAcrossAcquisition(StagingCase):
         # 0.00069 s apart.
         mcg = [0.0, -1.0, 0.0, 0.0959097, 0.0, 1.0, 0.0, 0.0959097]
         umn = [0.0, 1.0, 0.0, 0.0965997, 0.0, -1.0, 0.0, 0.0965997]
-        self.assertEqual(si.harmonisable(mcg, umn, 0.05), "")
+        self.assertEqual(si.harmonisable(mcg, umn, si.DEFAULT_READOUT_TOLERANCE), "")
 
-    def test_off_by_default_the_two_sites_are_two_cohorts(self):
+    def test_on_by_default_the_two_sites_are_one_cohort(self):
+        # The readouts differ by 0.719%, which is one acquisition stated as
+        # TotalReadoutTime at one site and as 1/BWPPE at the other. Leaving this
+        # off by default reported on half the study unless someone knew to ask.
         report = self.run_staging(self.config(self.two_sites()))
+        self.assertEqual(report["chosen"]["n_subjects"], 4)
+        self.assertEqual(report["excluded"], [])
+        self.assertEqual(len(report["chosen"]["harmonised"]["per_subject"]), 2)
+
+    def test_it_can_still_be_turned_off(self):
+        report = self.run_staging(self.config(self.two_sites(),
+                                              pool_across_acquisition=False))
         self.assertEqual(report["chosen"]["n_subjects"], 2)
         self.assertIn("topup acquisition parameters", report["excluded"][0]["reason"])
         self.assertEqual(report["chosen"]["harmonised"], {})
@@ -644,9 +654,10 @@ class TestPoolAcrossAcquisition(StagingCase):
         self.assertIn("pool_readout_tolerance", report["excluded"][0]["reason"])
 
     def test_the_readout_tolerance_can_be_narrowed(self):
+        # 0.1% -- tighter than the 0.719% these two sites differ by.
         report = self.run_staging(self.config(self.two_sites(),
                                               pool_across_acquisition=True,
-                                              pool_readout_tolerance=0.0001))
+                                              pool_readout_tolerance=0.001))
         self.assertEqual(report["chosen"]["n_subjects"], 2)
         self.assertIn("readout times differ by", report["excluded"][0]["reason"])
 
@@ -677,6 +688,65 @@ class TestPoolAcrossAcquisition(StagingCase):
         report = self.run_staging(self.config(folders, pool_across_acquisition=True))
         self.assertEqual(report["chosen"]["harmonised"], {})
         self.assertEqual(report["chosen"]["n_subjects"], 2)
+
+
+class TestReadoutBound(unittest.TestCase):
+    """The 1.75% bound, pinned to what was measured on real multi-site data.
+
+    Upper side: the same acquisition read two ways differs by 1/(N-1), where N is
+    ReconMatrixPE. Lower side: the closest pair of genuinely different scanners
+    in the study is 3.093% apart. The bound has to sit between them.
+    """
+
+    REFERENCE = 0.0959097
+
+    def acqp(self, readout):
+        return [0.0, -1.0, 0.0, readout, 0.0, 1.0, 0.0, readout]
+
+    def gap(self, fraction, tolerance=None):
+        if tolerance is None:
+            tolerance = si.DEFAULT_READOUT_TOLERANCE
+        return si.harmonisable(self.acqp(self.REFERENCE),
+                               self.acqp(self.REFERENCE * (1.0 + fraction)),
+                               tolerance)
+
+    def artefact(self, n):
+        """TotalReadoutTime against 1/BWPPE at ReconMatrixPE n, as a fraction."""
+        return 1.0 / (n - 1)
+
+    def test_every_matrix_the_study_uses_merges(self):
+        # 0.719%, 0.775%, 0.787%.
+        for n in (140, 130, 128):
+            self.assertEqual(self.gap(self.artefact(n)), "", "N=%d" % n)
+
+    def test_a_64_line_matrix_still_merges(self):
+        self.assertEqual(self.gap(self.artefact(64)), "")      # 1.587%
+
+    def test_the_edge_sits_between_n_59_and_n_58(self):
+        self.assertEqual(self.gap(self.artefact(59)), "")      # 1.724%
+        self.assertNotEqual(self.gap(self.artefact(58)), "")   # 1.754%
+
+    def test_the_closest_real_scanner_difference_is_refused(self):
+        self.assertNotEqual(self.gap(0.1 / 0.097 - 1.0), "")               # 3.093%
+        self.assertNotEqual(self.gap(0.0993301 / 0.0959097 - 1.0), "")     # 3.566%
+
+    def test_a_different_scanner_entirely_is_refused(self):
+        self.assertNotEqual(self.gap(0.129008 / 0.0959097 - 1.0), "")      # 34.5%
+
+    def test_the_refusal_states_percentages_not_seconds(self):
+        reason = self.gap(0.1 / 0.097 - 1.0)
+        self.assertIn("3.09%", reason)
+        self.assertIn("1.75%", reason)
+        self.assertNotIn(" s,", reason)
+
+    def test_the_bound_is_relative_so_it_scales_with_the_readout(self):
+        # One millisecond is inside the bound on a 0.12 s readout and outside it
+        # on a 0.02 s one. An absolute bound cannot say that.
+        for reference, merges in ((0.12, True), (0.02, False)):
+            reason = si.harmonisable(self.acqp(reference),
+                                     self.acqp(reference + 0.001),
+                                     si.DEFAULT_READOUT_TOLERANCE)
+            self.assertEqual(reason == "", merges, "%g s reference" % reference)
 
 
 class TestGroupingVariable(StagingCase):

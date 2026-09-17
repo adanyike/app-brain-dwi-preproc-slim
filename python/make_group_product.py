@@ -138,7 +138,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "value from %s -- because eddy_squad compares that field exactly and "
             "would otherwise have refused the study. The input datasets were not "
             "changed. Original values: %s. Readout times were required to agree "
-            "within %s s and the phase-encode vectors to be identical. "
+            "within %s and the phase-encode vectors to be identical. "
             "Distortion-derived indices (qc_vox_displ_std) depend on these "
             "parameters and are NOT comparable across the harmonised subjects; "
             "motion, outlier and CNR indices do not depend on them and are."
@@ -148,7 +148,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                harmonised.get("reference_subject", "the reference cohort"),
                "; ".join("%s: %s" % (label, json.dumps(value))
                          for label, value in sorted(per_subject.items())) or "none recorded",
-               harmonised.get("readout_tolerance", "?"))})
+               # A fraction of the reference readout, not seconds.
+               ("%.3g%%" % (100 * harmonised["readout_tolerance"])
+                if isinstance(harmonised.get("readout_tolerance"), (int, float))
+                else "the configured tolerance"))})
 
     for difference in chosen.get("disclosed_differences") or []:
         messages.append({"type": "warning", "msg":

@@ -196,14 +196,25 @@ study-wise eddy QC (SQUAD) across a whole cohort.
   -- drop a field your FSL tolerates, or name a tolerant one to compare it exactly
   -- and a refusal the app did not predict is followed by a field-by-field
   comparison of the staged subjects rather than a traceback.
-- `pool_across_acquisition` (off by default) is the way past the one difference no
-  signature can soften. Two sites whose readout times differ in the sixth decimal
+- `pool_across_acquisition` (**on** by default) is the way past the one difference
+  no signature can soften. Two sites whose readout times differ in the sixth decimal
   are two cohorts to SQUAD, and the cross-site report it exists to produce cannot
   be made. Set it and cohorts differing *only* in `data_eddy_para` are merged, by
   rewriting that field in the App's own staged copies of the databases -- never in
   the inputs, which stay the record of what was acquired. It is bounded: identical
   phase-encode vectors, the same number of series, and readout times within
-  `pool_readout_tolerance` (0.05 s). Anything else is a different acquisition and
+  `pool_readout_tolerance` -- **1.75% of the reference site's readout**. The bound
+  is relative because the difference it absorbs is a ratio: `TotalReadoutTime` is
+  `EES x (N-1)` and `1/BandwidthPerPixelPhaseEncode` is `EES x N`, so the two
+  ways of stating one readout differ by `1/(N-1)`, where `N` is `ReconMatrixPE` --
+  0.72% at a 140-line matrix, 0.79% at 128, 1.59% at 64. 1.75% covers every matrix
+  down to 59 lines. Both ends were measured on a real multi-site study rather than
+  assumed: the artefacts came in at 0.719% and 0.775% (both resolving to whole
+  matrices, 140 and 130), and the closest pair of genuinely different scanners at
+  3.093%, leaving 1.34 points of daylight. It defaults on because with a relative
+  bound the only thing it can merge is one acquisition described two ways; off by
+  default meant a multi-site study reported on half its subjects unless someone
+  knew to ask. Anything else is a different acquisition and
   is refused, with the reason on the task page. And it is disclosed, which is the
   price of the feature: `cohorts.json` records every subject's original value, the
   log warns, and `product.json` names what it costs -- motion, outlier and CNR

@@ -311,14 +311,39 @@ signature can soften. Two sites running the same protocol whose readout times
 differ in the sixth decimal — 0.0959097 against 0.0965997 — are two cohorts, and
 the cross-site group report SQUAD exists to produce cannot be made.
 
-`pool_across_acquisition: true` merges cohorts that differ **only** in that
-field, by rewriting it in the App's own staged copies of the QC databases to the
-reporting cohort's value. The inputs are never touched. It is bounded: the
-phase-encode vectors must be identical as a set, and the readout times must agree
-within `pool_readout_tolerance` (0.05 s by default). Different phase-encode
-vectors, a different number of series, or a wider readout gap are refused and the
-cohorts stay split, with the reason on the task page — that is a different
-acquisition, not the same one described differently.
+`pool_across_acquisition` (**on by default**) merges cohorts that differ **only**
+in that field, by rewriting it in the App's own staged copies of the QC
+databases to the reporting cohort's value. The inputs are never touched. It is
+bounded: the phase-encode vectors must be identical as a set, and the readout
+times must agree within `pool_readout_tolerance` — **1.75%** of the reference
+site's readout, by default. Different phase-encode vectors, a different number of
+series, or a wider readout gap are refused and the cohorts stay split, with the
+reason on the task page — that is a different acquisition, not the same one
+described differently. Set it to `false` to get one report per acquisition.
+
+The bound is relative because the difference it absorbs is a ratio. A sidecar
+states the readout in one of two ways, and they measure different spans of the
+same echo train: `TotalReadoutTime` is `EES × (N − 1)`, the first echo centre to
+the last, while `1/BandwidthPerPixelPhaseEncode` is `EES × N`, the whole readout
+including the final echo spacing. They differ by exactly one echo spacing — as a
+fraction, `1/(N − 1)`, where `N` is `ReconMatrixPE`. Fence posts and rails: `N`
+posts have `N − 1` rails between them, and one rail matters more on a short
+fence. So the artefact is 0.72% at a 140-line matrix, 0.79% at 128, 1.59% at 64:
+
+| `ReconMatrixPE` | same acquisition, read two ways |
+|---|---|
+| 140 | 0.719% |
+| 128 | 0.787% |
+| 96 | 1.053% |
+| 64 | 1.587% |
+| 59 | 1.724% — the edge of the default bound |
+
+1.75% therefore covers every matrix a brain DWI is acquired at. Both ends of the
+bound were measured rather than assumed: in a real multi-site study the closest
+pair of *genuinely different* scanners was 3.093% apart, so the default leaves
+1.34 percentage points of daylight beneath a difference that must never be
+merged. Narrow `pool_readout_tolerance` if your sites are closer together than
+that.
 
 Everything about it is disclosed, because a rewritten database no longer says
 what the scanner said: `cohorts.json` records `harmonised.per_subject` with every
@@ -352,8 +377,8 @@ python3 python/eddyqc_summary.py --qc-json <task>/output/qc/eddy_quad/qc.json \
 | `update_single_subject_reports` | `true` | Also rewrite each subject's own report with study-wise context. Needs that subject's `qc.pdf` among the inputs |
 | `cohort` | largest | The signature (or its short hash) of the cohort to report on |
 | `require_homogeneous` | `false` | Fail when the inputs split into more than one cohort, instead of choosing the largest |
-| `pool_across_acquisition` | `false` | Pool cohorts that differ only in `data_eddy_para`, by rewriting it in the staged copies. Bounded and disclosed — see above |
-| `pool_readout_tolerance` | `0.05` | How far apart two readout times may be (seconds) and still be called the same acquisition |
+| `pool_across_acquisition` | `true` | Pool cohorts that differ only in `data_eddy_para`, by rewriting it in the staged copies. Bounded and disclosed — see above. `false` gives one report per acquisition |
+| `pool_readout_tolerance` | `0.0175` | How far apart two readout times may be, **as a fraction of the reference site's**, and still be called the same acquisition |
 | `min_subjects` | `2` | Refuse to call a smaller group a study |
 | `signature_fields` | the five SQUAD compares exactly | Which acquisition fields decide cohort membership. Drop one your FSL tolerates, or add `data_unique_bvals` / `data_vox_size` to compare them exactly rather than within SQUAD's tolerance |
 | `subject_labels` | from the data | Comma-separated labels overriding the ones taken from `squad_ready.json` / `_inputs` |

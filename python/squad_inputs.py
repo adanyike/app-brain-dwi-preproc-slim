@@ -69,11 +69,25 @@ from eddyqc_summary import (  # noqa: E402  (path set above)
     tolerance_gaps,
 )
 
-# How far apart two sites' readout times may be before `pool_across_acquisition`
-# refuses to call them the same acquisition. 0.05 s is wider than the difference
-# between two implementations of the same protocol (fractions of a millisecond)
-# and far narrower than the difference between two protocols.
-DEFAULT_READOUT_TOLERANCE = 0.05
+# How far apart two sites' readout times may be, **as a fraction of the reference
+# site's**, before `pool_across_acquisition` refuses to call them the same
+# acquisition.
+#
+# Relative rather than absolute, because the difference this absorbs is itself a
+# ratio. The two ways a sidecar states the readout measure different spans of one
+# echo train -- `TotalReadoutTime` is EES x (N-1), the first echo centre to the
+# last; `1/BandwidthPerPixelPhaseEncode` is EES x N, the whole readout including
+# the final echo spacing -- so they differ by exactly one echo spacing, which as a
+# fraction is 1/(N-1), where N is ReconMatrixPE. Fence posts and rails: N posts
+# have N-1 rails between them, and one rail matters more on a short fence.
+#
+# 1.75% therefore covers every phase-encode matrix down to N=59 (0.72% at N=140,
+# 0.79% at N=128, 1.59% at N=64), which is below any matrix a brain DWI is
+# acquired at. The ceiling is measured too: the closest pair of genuinely
+# different scanners seen in a real multi-site study is 3.09% apart, so the bound
+# keeps 1.34 percentage points of daylight beneath a difference that must never
+# be merged.
+DEFAULT_READOUT_TOLERANCE = 0.0175
 
 # config.json keys that may carry the QUAD folders, in the order they are
 # consulted. `eddyqc` is what the group App maps; the others let the same code
@@ -268,6 +282,20 @@ def signature_fields(config: dict) -> List[str]:
 def tolerant_fields(exact: Sequence[str]) -> List[str]:
     """The fields still compared within SQUAD's tolerance, given the exact set."""
     return [name for name in TOLERANT_FIELDS if name not in exact]
+
+
+def pooling_requested(config: dict) -> bool:
+    """Whether to merge cohorts differing only in the acquisition parameters.
+
+    On unless turned off. With a relative bound the only thing this can merge is
+    one acquisition described two ways -- the readout stated as
+    ``TotalReadoutTime`` at one site and as ``1/BandwidthPerPixelPhaseEncode`` at
+    another -- which is the claim the option makes, and every merge is disclosed.
+    Leaving it off by default meant a multi-site study reported on half its
+    subjects unless someone knew to ask, which is the failure this exists to end.
+    """
+    value = config.get("pool_across_acquisition")
+    return True if value in (None, "") else as_bool(value)
 
 
 def collect(config: dict, overrides: Sequence[str]) -> Tuple[List[dict], List[dict]]:
@@ -511,10 +539,15 @@ def harmonisable(reference: Any, other: Any, tolerance: float) -> str:
                 "a different acquisition, not the same one described differently"
                 % (abbreviate([list(v) for v in sorted({v for v, _ in here})]),
                    abbreviate([list(v) for v in sorted({v for v, _ in there})])))
-    gap = max(abs(x - y) for _, x in here for _, y in there)
-    if gap > tolerance:
-        return ("the readout times differ by %.6g s, more than "
-                "pool_readout_tolerance (%.6g s)" % (gap, tolerance))
+    if any(readout == 0 for _, readout in here):
+        return ("the reference readout time is zero, so there is nothing to "
+                "measure a difference against")
+    # Relative to the reference, which is the side the tolerance is a fraction of
+    # -- the same asymmetry np.allclose has, and the same reference subject.
+    worst = max(abs(y - x) / abs(x) for _, x in here for _, y in there)
+    if worst > tolerance:
+        return ("the readout times differ by %.3g%%, more than "
+                "pool_readout_tolerance (%.3g%%)" % (100 * worst, 100 * tolerance))
     return ""
 
 
@@ -883,7 +916,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         requested = str(config.get("cohort") or "").strip()
         harmonised: Dict[str, Any] = {}
-        if as_bool(config.get("pool_across_acquisition")):
+        if pooling_requested(config):
             tolerance = as_number(config.get("pool_readout_tolerance"))
             if tolerance is None:
                 tolerance = DEFAULT_READOUT_TOLERANCE

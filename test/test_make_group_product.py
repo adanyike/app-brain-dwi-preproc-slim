@@ -111,7 +111,7 @@ class TestMessages(unittest.TestCase):
             "meaning": "topup acquisition parameters",
             "reference": [[0, 1, 0, 0.0965997], [0, -1, 0, 0.0965997]],
             "reference_subject": "sub-01",
-            "readout_tolerance": 0.05,
+            "readout_tolerance": 0.0175,
             "per_subject": {"sub-03": [[0, 1, 0, 0.0959097], [0, -1, 0, 0.0959097]]},
         })
         warnings = " ".join(messages(build(cohorts=cohorts, db=GROUP_DB), "warning"))
@@ -121,6 +121,10 @@ class TestMessages(unittest.TestCase):
         self.assertIn("0.0959097", warnings)
         self.assertIn("The input datasets were not changed", warnings)
         self.assertIn("qc_vox_displ_std", warnings)
+        # The bound is a fraction of the reference readout, so it must not be
+        # rendered as seconds.
+        self.assertIn("within 1.75%", warnings)
+        self.assertNotIn("0.0175 s", warnings)
 
     def test_a_difference_squad_never_compares_is_disclosed_on_the_page(self):
         cohorts = dict(COHORTS)

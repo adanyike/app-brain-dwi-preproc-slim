@@ -9,8 +9,8 @@
   "variable_is_continuous": false,
   "update_single_subject_reports": true,
   "require_homogeneous": false,
-  "pool_across_acquisition": false,
-  "pool_readout_tolerance": 0.05,
+  "pool_across_acquisition": true,
+  "pool_readout_tolerance": 0.0175,
   "cohort": "",
   "min_subjects": 2
 }

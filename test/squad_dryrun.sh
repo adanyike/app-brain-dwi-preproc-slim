@@ -236,6 +236,11 @@ check "and shows both values" bash -c '
     jq -r ".excluded[0].reason" "'"$SCEN"'/output/squad/cohorts.json" | grep -q "0.1043"'
 check "eddy_squad never saw the mixture" bash -c '
     ! grep -qi "inconsistency detected" "'"$SCEN"'/log.txt"'
+# Pooling is on by default, so it was considered here and declined -- 8.8% is a
+# different acquisition, not one described two ways.
+check "the refusal is stated as a percentage" bash -c '
+    jq -r ".excluded[0].reason" "'"$SCEN"'/output/squad/cohorts.json" \
+    | grep -qE "readout times differ by [0-9.]+%"'
 
 # A shell b-value that differs by 5 is the SAME cohort: squad_db.py compares
 # these with np.allclose(atol=20), so splitting them here would refuse a study
@@ -336,7 +341,8 @@ qc["data_eddy_para"] = [n for row in reversed(rows) for n in row]
 json.dump(qc, open(path, "w"), indent=4)
 EOPY
 done
-group_config "$SCEN/config.json" '{"pool_across_acquisition": true}' "$SCEN"/input/sub-0*
+# No key set: pooling is the default now, so this is what a study gets.
+group_config "$SCEN/config.json" '{}' "$SCEN"/input/sub-0*
 ( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run_squad.sh" ) \
     > "$SCEN/log.txt" 2>&1
 STATUS=$?
@@ -371,6 +377,18 @@ check "the input datasets were not touched" bash -c '
     [ "$(for d in "'"$SCEN"'"/input/*/; do
              jq -c ".data_eddy_para" "$d/qc.json"; done | sort -u | wc -l)" = "2" ]'
 
+# Turning it off puts the study back to one report per acquisition.
+SCEN2="$ROOT/2g-pooling-off"
+mkdir -p "$SCEN2"
+jq '. + {pool_across_acquisition: false}' "$SCEN/config.json" > "$SCEN2/config.json"
+( cd "$SCEN2" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run_squad.sh" ) \
+    > "$SCEN2/log.txt" 2>&1
+check "pool_across_acquisition can be turned off" bash -c '
+    [ "$(jq -r ".chosen.n_subjects" "'"$SCEN2"'/output/squad/cohorts.json")" = "2" ]'
+check "and then nothing is rewritten" bash -c '
+    [ "$(jq -r ".chosen.harmonised | length" \
+         "'"$SCEN2"'/output/squad/cohorts.json")" = "0" ]'
+
 # ...and the bound is real: different phase-encode vectors are a different
 # acquisition, and no amount of opting in makes them one.
 printf '\n--- 2h-harmonisation-refused ---\n'
@@ -391,7 +409,7 @@ qc["data_unique_pes"] = [[1, 0, 0], [-1, 0, 0]]
 json.dump(qc, open(path, "w"), indent=4)
 EOPY
 done
-group_config "$SCEN/config.json" '{"pool_across_acquisition": true}' "$SCEN"/input/sub-0*
+group_config "$SCEN/config.json" '{}' "$SCEN"/input/sub-0*
 ( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run_squad.sh" ) \
     > "$SCEN/log.txt" 2>&1
 STATUS=$?
