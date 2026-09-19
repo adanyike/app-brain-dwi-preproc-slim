@@ -203,6 +203,23 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(src["pe_source"], "config.json")
         self.assertEqual(src["trt_source"], "config.json")
 
+    def test_the_pe_source_names_the_field_that_answered(self):
+        # PhaseEncodingAxis carries no sign. Reporting it as
+        # PhaseEncodingDirection claims a signed BIDS field was found in exactly
+        # the case where the difference decides whether pe_dir/rpe_dir have to
+        # be set by hand -- a Philips export gives "j" for both series.
+        meta = {"PhaseEncodingAxis": "j", "TotalReadoutTime": 0.0342}
+        _, _, src = pi.series_pe(meta, "", None, "dwi")
+        self.assertEqual(src["pe_source"], "PhaseEncodingAxis")
+        self.assertEqual(src["pe_dir"], "j")
+
+    def test_a_signed_direction_still_wins_and_is_named_as_itself(self):
+        meta = {"PhaseEncodingDirection": "j-", "PhaseEncodingAxis": "j",
+                "TotalReadoutTime": 0.0342}
+        _, _, src = pi.series_pe(meta, "", None, "dwi")
+        self.assertEqual(src["pe_source"], "PhaseEncodingDirection")
+        self.assertEqual(src["pe_dir"], "j-")
+
     def test_readout_time_sources_are_tried_in_order(self):
         cases = [
             ({"TotalReadoutTime": 0.0342}, "TotalReadoutTime", 0.0342),

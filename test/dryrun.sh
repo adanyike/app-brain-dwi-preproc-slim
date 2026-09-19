@@ -429,6 +429,31 @@ check "slspec passed to eddy"   grep -q -- "--slspec=" <<< "$(eddy_cmd)"
 check "the generated order is the interleave" bash -c '
     [ "$(head -1 "'"$SCEN"'/output/qc/slspec.txt" | tr -s " " | sed "s/^ *//")" = "0 6" ]'
 
+# ...and the multiband factor need not be typed in when the sidecar states it.
+printf '\n--- 16a-multiband-from-the-sidecar ---\n'
+SCEN="$ROOT/16a-mb-from-sidecar"
+mkdir -p "$SCEN"
+python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
+for j in "$SCEN"/input/*/dwi.json; do
+    # A Philips MB-SENSE export: no timings to derive from, but the out-of-plane
+    # SENSE factor is the multiband factor and it is right there in the sidecar.
+    jq 'del(.SliceTiming)
+        + {ParallelAcquisitionTechnique: "MBSENSE",
+           ParallelReductionFactorOutOfPlane: 2}' "$j" > "$j.tmp" && mv "$j.tmp" "$j"
+done
+# Note: no "multiband" key in the config at all.
+base_config "$SCEN/input" '{"eddy_binary":"eddy_cuda10.2","slice_order":"interleaved"}' \
+    > "$SCEN/config.json"
+( cd "$SCEN" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
+    > "$SCEN/log.txt" 2>&1
+check "pipeline exits 0" test $? -eq 0
+check "the factor came from the sidecar, not the config" \
+    grep -q "ParallelReductionFactorOutOfPlane" "$SCEN/log.txt"
+check "and it was applied" grep -q "multiband factor 2" "$SCEN/log.txt"
+check "the slspec has one column per band" bash -c '
+    [ "$(head -1 "'"$SCEN"'/output/qc/slspec.txt" | wc -w)" = "2" ]'
+check "slice-to-volume is on" grep -q -- "--mporder=" <<< "$(eddy_cmd)"
+
 # With timings present the declaration is checked against them, not trusted.
 scenario "16b-declared-agrees" "$ROOT/bin-gpu" '{"eddy_binary":"eddy_cuda10.2","slice_order":"interleaved","multiband":2}'
 check "the declaration is cross-checked" \

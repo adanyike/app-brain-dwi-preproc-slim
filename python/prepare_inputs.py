@@ -133,9 +133,19 @@ def resolve_pe_dir(field, pe_override: str) -> tuple[str | None, str]:
     if pe_override:
         return pe_override, "config.json"
 
-    pe_dir = field("PhaseEncodingDirection", "PhaseEncodingAxis")
+    # Asked separately, not as one call with two names, so the source names the
+    # field that actually answered. PhaseEncodingAxis carries no sign -- a
+    # Philips export may give "j" for both the AP and the PA series -- and
+    # reporting it as PhaseEncodingDirection claims a signed BIDS field was
+    # found in exactly the case where the distinction decides whether pe_dir
+    # and rpe_dir have to be set by hand.
+    pe_dir = field("PhaseEncodingDirection")
     if pe_dir:
         return pe_dir, "PhaseEncodingDirection"
+
+    pe_dir = field("PhaseEncodingAxis")
+    if pe_dir:
+        return pe_dir, "PhaseEncodingAxis"
 
     pe_dir = pe_from_csa(field)
     if pe_dir:

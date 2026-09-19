@@ -84,9 +84,13 @@ app resolves from the first of these that is available:
    other protocols, and a slspec that does not describe the acquisition (wrong
    slice count, out-of-range or repeated indices, ragged rows) is refused rather
    than passed to `eddy`.
-2. **A declared `slice_order`**, plus `multiband`, `slice_packages` and
-   `slice_step` as the protocol requires. This is for sidecars that carry no
-   timings at all — some Philips exports, or a converter that dropped the field.
+2. **A declared `slice_order`**, plus `slice_packages` and `slice_step` as the
+   protocol requires. This is for sidecars that carry no timings at all — some
+   Philips exports, or a converter that dropped the field. `multiband` is read
+   from the sidecar when it states it — `MultibandAccelerationFactor` on
+   Siemens, `ParallelReductionFactorOutOfPlane` on Philips MB-SENSE — and the
+   log names which field it came from; set it in `config.json` to override, or
+   when neither field is present.
    It asserts the acquisition rather than measuring it, so it is opt-in; where
    the sidecar does carry `SliceTiming`, the declaration is checked against it
    and a disagreement stops the run. Note that Philips's own `default` scan
@@ -414,7 +418,7 @@ Every parameter is optional.
 | `require_gpu` | `false` | `true` fails when no GPU is visible; `false` falls back to a CPU eddy and skips slice-to-volume correction |
 | `biascorrect` | `ants` | B1 bias correction: `ants`, `fsl` or `none` |
 | `slice_order` | `auto` | How the `eddy` slice specification is obtained when no `slspec` **input** is given (that file wins if present). `auto` derives it from `SliceTiming`; `ascending`, `descending`, `interleaved`, `rev_interleaved`, `philips_default` or `step` declare it from the protocol instead, for sidecars carrying no timings |
-| `multiband` / `slice_packages` / `slice_step` | `1` / `1` / — | Protocol parameters used with a declared `slice_order` |
+| `multiband` / `slice_packages` / `slice_step` | from the sidecar, else `1` / `1` / — | Protocol parameters used with a declared `slice_order`. `multiband` falls back to `MultibandAccelerationFactor` (Siemens) or `ParallelReductionFactorOutOfPlane` (Philips MB-SENSE) |
 | `acqp` / `index` | derived | Supply `acqparams.txt` / `index.txt` directly, replacing the values derived from the sidecars. For datasets whose sidecars are incomplete |
 | `topup_config` | `auto` | FSL topup schedule, chosen from the matrix size: `b02b0_4.cnf`, `b02b0_2.cnf` or `b02b0_1.cnf` as the dimensions divide by 4, 2 or neither. Name one explicitly to override |
 | `atlas_registration` | `true` | Set false to stop after preprocessing and the tensor fit |

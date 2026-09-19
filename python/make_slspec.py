@@ -149,6 +149,40 @@ def package_order(length: int, order: str, step: int | None = None) -> List[int]
                       % (order, ", ".join(SLICE_ORDERS)))
 
 
+# How each vendor states the multiband factor. Siemens first: dcm2niix writes
+# MultibandAccelerationFactor for it and means exactly this, whereas Philips's
+# ParallelReductionFactorOutOfPlane is the out-of-plane SENSE factor, which is
+# the multiband factor for MB-SENSE and the only thing on offer there. A scanner
+# that somehow carried both is telling us in the less ambiguous field first.
+MULTIBAND_FIELDS = ("MultibandAccelerationFactor",
+                    "ParallelReductionFactorOutOfPlane")
+
+
+def multiband_from_sidecar(meta: dict) -> Tuple[int, str]:
+    """(multiband factor, the field it came from) -- (1, "") when unstated.
+
+    Only consulted on the declared path, where the alternative is a number typed
+    into config.json by hand. It is still a declaration: nothing here is checked
+    against the data, because a sidecar with no SliceTiming has nothing to check
+    against. Anything unreadable falls back to 1 rather than guessing, since a
+    wrong factor builds a slspec for an acquisition this is not.
+    """
+    for name in MULTIBAND_FIELDS:
+        try:
+            value, path = sidecar.find_scalar(meta, name)
+        except sidecar.SidecarError:
+            continue
+        if value is None:
+            continue
+        try:
+            factor = int(round(float(value)))
+        except (TypeError, ValueError):
+            continue
+        if factor >= 1:
+            return factor, path
+    return 1, ""
+
+
 def generate_slspec(n_slices: int, multiband: int = 1, packages: int = 1,
                     order: str = "ascending", step: int | None = None
                     ) -> Tuple[List[List[int]], int]:
@@ -201,8 +235,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--slice-order", choices=SLICE_ORDERS,
                     help="build the slspec from this declared excitation order "
                          "instead of from the sidecar's timings")
-    ap.add_argument("--multiband", type=int, default=1,
-                    help="multiband factor, when generating (default 1)")
+    ap.add_argument("--multiband", type=int,
+                    help="multiband factor, when generating. Read from the "
+                         "sidecar when --json is given and this is not; 1 if "
+                         "neither states it")
     ap.add_argument("--packages", type=int, default=1,
                     help="number of Philips packages, when generating (default 1)")
     ap.add_argument("--slice-step", type=int,
@@ -214,22 +250,34 @@ def main(argv: Sequence[str] | None = None) -> int:
                          "mismatch is a hard error when deriving")
     args = ap.parse_args(argv)
 
-    if bool(args.json) == bool(args.slice_order):
-        raise SlspecError("give either --json (derive from timings) or "
-                          "--slice-order (generate from the protocol), not both")
+    # Which path runs is decided by --slice-order alone. --json is required to
+    # derive from timings and optional when generating, where it supplies the
+    # multiband factor rather than the excitation order.
+    if not args.slice_order and not args.json:
+        raise SlspecError("give --json (derive from timings) or --slice-order "
+                          "(generate from the protocol)")
 
     if args.slice_order:
         if args.n_slices is None:
             raise SlspecError("--n-slices is required when generating a slspec")
+        multiband, mb_source = args.multiband, "given"
+        if multiband is None:
+            if args.json:
+                with open(args.json) as fh:
+                    multiband, mb_source = multiband_from_sidecar(json.load(fh))
+            else:
+                multiband, mb_source = 1, ""
+            if not mb_source:
+                multiband, mb_source = multiband or 1, "unstated, assumed"
         rows, multiband_factor = generate_slspec(
-            args.n_slices, multiband=args.multiband, packages=args.packages,
+            args.n_slices, multiband=multiband, packages=args.packages,
             order=args.slice_order, step=args.slice_step,
         )
         n_slices = args.n_slices
-        source = ("declared slice order '%s'%s, multiband %d, %d package(s)"
+        source = ("declared slice order '%s'%s, multiband %d (%s), %d package(s)"
                   % (args.slice_order,
                      "" if args.slice_step is None else " step %d" % args.slice_step,
-                     args.multiband, args.packages))
+                     multiband, mb_source, args.packages))
     else:
         with open(args.json) as fh:
             meta = json.load(fh)

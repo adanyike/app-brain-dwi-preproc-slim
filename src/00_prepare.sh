@@ -140,7 +140,15 @@ elif [ -n "$SLICE_ORDER" ]; then
     # Philips data.  This is a declaration about the acquisition, not a
     # measurement of it, so it only runs when asked for explicitly.
     GEN_ARGS=(--slice-order "$SLICE_ORDER" --n-slices "$NSLICE"
-              --multiband "$(cfg multiband 1)" --packages "$(cfg slice_packages 1)")
+              --packages "$(cfg slice_packages 1)")
+    # Passed only when config.json actually sets it, so make_slspec can tell an
+    # unset value from a deliberate 1 and fall back to whatever the sidecar
+    # states -- MultibandAccelerationFactor on Siemens,
+    # ParallelReductionFactorOutOfPlane on Philips MB-SENSE. An explicit value
+    # still wins; the sidecar is only consulted when there is nothing to obey.
+    MULTIBAND="$(cfg multiband "")"
+    [ -n "$MULTIBAND" ] && GEN_ARGS+=(--multiband "$MULTIBAND") || true
+    [ -n "$DWI_JSON" ] && GEN_ARGS+=(--json "$DWI_JSON") || true
     SLICE_STEP="$(cfg slice_step "")"
     [ -n "$SLICE_STEP" ] && GEN_ARGS+=(--slice-step "$SLICE_STEP") || true
 

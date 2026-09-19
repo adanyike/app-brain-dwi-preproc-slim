@@ -34,6 +34,18 @@ study-wise eddy QC (SQUAD) across a whole cohort.
   from it. It is opt-in because it asserts the acquisition rather than
   measuring it, and where `SliceTiming` is present the declaration is compared
   against it and a disagreement stops the run.
+- The multiband factor for a declared `slice_order` is read from the sidecar
+  when it states one -- `MultibandAccelerationFactor` on Siemens,
+  `ParallelReductionFactorOutOfPlane` on Philips MB-SENSE -- rather than having
+  to be typed into `config.json` beside a scanner that already said it. The log
+  names the field it came from, an explicit `multiband` still wins, and anything
+  unreadable falls back to 1 rather than guessing, since a wrong factor builds a
+  slspec for an acquisition this is not.
+- `prep.json` names the field the phase-encoding direction actually came from.
+  It previously reported `PhaseEncodingDirection` even when the value was really
+  the unsigned `PhaseEncodingAxis` -- which is what a Philips export carries, and
+  which gives both series the same direction, so the distinction is exactly what
+  tells you `pe_dir`/`rpe_dir` must be set by hand.
 - `acqp` and `index` accept a hand-made `acqparams.txt` / `index.txt` in place
   of the derived ones, for datasets whose sidecars are incomplete.
 - The topup configuration is chosen from the matrix size, since topup requires
