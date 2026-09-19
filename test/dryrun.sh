@@ -435,9 +435,12 @@ SCEN="$ROOT/16a-mb-from-sidecar"
 mkdir -p "$SCEN"
 python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
 for j in "$SCEN"/input/*/dwi.json; do
-    # A Philips MB-SENSE export: no timings to derive from, but the out-of-plane
-    # SENSE factor is the multiband factor and it is right there in the sidecar.
-    jq 'del(.SliceTiming)
+    # A Philips MB-SENSE export: no timings to derive from, and no Siemens
+    # MultibandAccelerationFactor either -- the out-of-plane SENSE factor is the
+    # only statement of the multiband factor on offer. make_test_data.py writes
+    # both fields, so the Siemens one has to go or it wins, correctly, and this
+    # scenario would not be testing the Philips path at all.
+    jq 'del(.SliceTiming) | del(.MultibandAccelerationFactor)
         + {ParallelAcquisitionTechnique: "MBSENSE",
            ParallelReductionFactorOutOfPlane: 2}' "$j" > "$j.tmp" && mv "$j.tmp" "$j"
 done
