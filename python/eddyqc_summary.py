@@ -9,10 +9,16 @@ launched task: slice-to-volume correction depends on a GPU being visible, the
 susceptibility field on the subject having a reverse phase-encoded series, and
 outlier replacement / CNR maps on config keys that drift between submissions.
 
-So each subject publishes a signature alongside its database: the five feature
-flags SQUAD compares, plus the shell structure that has to match for the
-group's per-shell arrays to line up. The group app buckets subjects by that
-signature and reports what it had to leave out, instead of dying on subject 37.
+So each subject publishes a signature alongside its database: the six feature
+flags SQUAD compares, plus the acquisition fields it compares *exactly*. The
+group app buckets subjects by that signature, checks the two fields SQUAD
+compares within a tolerance, and reports what it had to leave out -- instead of
+dying on subject 37.
+
+The signature mirrors SQUAD's comparison rather than exceeding it. A key that is
+looser fails the whole study where SQUAD refuses; a key that is stricter splits
+a study SQUAD would have pooled, which costs just as much and announces itself
+as nothing at all.
 
 Written by stage 6 into ``output/eddyqc/squad_ready.json``.
 """
@@ -39,24 +45,44 @@ SQUAD_FLAGS = (
     "qc_rss_flag",
 )
 
-# The acquisition fields SQUAD compares across subjects before it will build a
-# group database, alongside the flags. When they differ it refuses the whole
-# study -- "Inconsistency detected in eddy input data in <description>!" -- so
-# the cohort signature has to be at least as strict as this comparison, and
-# compare the values *exactly*. Rounding here (b-values to the nearest shell,
-# say) would pool subjects that SQUAD then rejects, which is the one outcome
-# worse than splitting a cohort.
-ACQUISITION_FIELDS = (
+# How squad_db.py compares the eddy *input* data across subjects before it will
+# build a group database. It does not compare every field, and it does not
+# compare them all the same way -- so neither do we. A key stricter than SQUAD's
+# splits cohorts SQUAD would have pooled, which is how a two-site study ends up
+# as two group reports of two subjects each.
+#
+# Exact (``!=``): the fields a difference in which is a different acquisition,
+# and SQUAD says so.
+EXACT_FIELDS = (
     "data_no_shells",
-    "data_unique_bvals",
     "data_no_PE_dirs",
-    "data_unique_pes",
-    "data_eddy_para",
-    "data_protocol",
-    "data_vox_size",
-    "data_no_dw_vols",
     "data_no_b0_vols",
+    "data_no_dw_vols",
+    "data_eddy_para",
 )
+
+# Tolerant (``np.allclose``, after a length check): SQUAD allows the scanner's
+# own jitter here, and the tolerances are its own. b-values are compared with
+# atol=20, which is why a b=1495 shell pools with a b=1500 one; voxel sizes with
+# rtol=1e-2, which covers the last digit of a header. The second number in each
+# pair is numpy's own default for the tolerance SQUAD leaves unset, since
+# ``np.allclose`` applies both: |a - b| <= atol + rtol * |b|.
+TOLERANT_FIELDS = {
+    "data_unique_bvals": (20.0, 1e-5),   # (atol, rtol)
+    "data_vox_size": (1e-8, 1e-2),
+}
+
+# Not compared by SQUAD at all. It labels the group report from the first
+# subject in the list, so a difference here is a mislabelled report rather than
+# a refusal -- worth saying on the task page, never a reason to split a cohort.
+DISCLOSED_FIELDS = (
+    "data_protocol",
+    "data_unique_pes",
+)
+
+# Every field worth describing a subject's acquisition with, in the order a
+# reader wants them. The signature is built from the exact ones alone.
+REPORTED_FIELDS = EXACT_FIELDS + tuple(TOLERANT_FIELDS) + DISCLOSED_FIELDS
 
 # SQUAD names these in its own error message; naming them the same way lets a
 # reader connect a cohort split to the refusal it prevented.
@@ -124,13 +150,64 @@ def canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def acquisition_of(qc: dict, fields: Sequence[str] = ACQUISITION_FIELDS) -> Dict[str, Any]:
-    """The acquisition description SQUAD insists is identical across subjects.
+def acquisition_of(qc: dict, fields: Sequence[str] = REPORTED_FIELDS) -> Dict[str, Any]:
+    """The acquisition, as QUAD described it.
 
-    Values are taken raw, exactly as QUAD wrote them: SQUAD compares them with
-    no tolerance, so neither can we.
+    Values are taken raw: how each one is *compared* is the caller's business --
+    exactly (``signature_of``), within SQUAD's tolerance (``tolerance_gaps``), or
+    not at all beyond being disclosed.
     """
     return {name: qc.get(name) for name in fields}
+
+
+def numbers_of(value: Any) -> List[float] | None:
+    """``value`` as a list of floats, or None if any part of it is not a number.
+
+    Distinct from ``as_number_list``, which drops what it cannot parse: a
+    tolerance comparison has to know that it is not looking at numbers, rather
+    than silently compare the remains.
+    """
+    items = list(value) if isinstance(value, (list, tuple)) else [value]
+    out = []
+    for item in items:
+        number = as_number(item)
+        if number is None:
+            return None
+        out.append(number)
+    return out
+
+
+def close_enough(value: Any, reference: Any, atol: float, rtol: float) -> bool:
+    """``np.allclose(value, reference)``, in pure Python, after a length check.
+
+    SQUAD checks the lengths itself for the b-values and relies on numpy for the
+    voxel size, where a length mismatch would broadcast or raise rather than
+    compare -- so a differing length is a difference either way.
+
+    ``reference`` is numpy's ``b``, the side ``rtol`` scales, and it is the
+    first subject in the list: SQUAD compares every subject against that one.
+    """
+    a, b = numbers_of(value), numbers_of(reference)
+    if a is None or b is None:
+        return canonical(value) == canonical(reference)
+    if len(a) != len(b):
+        return False
+    return all(abs(x - y) <= atol + rtol * abs(y) for x, y in zip(a, b))
+
+
+def tolerance_gaps(acquisition: Dict[str, Any], reference: Dict[str, Any],
+                   fields: Sequence[str] | None = None) -> List[str]:
+    """The tolerant fields where these two subjects are too far apart for SQUAD.
+
+    ``fields`` narrows the check to the tolerant fields still being compared
+    that way -- one named in ``signature_fields`` is compared exactly instead,
+    and checking it twice would only report the same difference twice.
+    """
+    names = list(TOLERANT_FIELDS) if fields is None else [
+        name for name in fields if name in TOLERANT_FIELDS]
+    return [name for name in names
+            if not close_enough(acquisition.get(name), reference.get(name),
+                                *TOLERANT_FIELDS[name])]
 
 
 def flags_of(qc: dict) -> Dict[str, bool]:
@@ -150,25 +227,25 @@ def protocol_of(qc: dict) -> Dict[str, Any]:
     }
 
 
-def signature_of(flags: Dict[str, bool], acquisition: Dict[str, Any]) -> str:
-    """The cohort key: what must match for SQUAD to pool these subjects.
+def signature_of(flags: Dict[str, bool], acquisition: Dict[str, Any],
+                 fields: Sequence[str] = EXACT_FIELDS) -> str:
+    """The cohort key: what must match exactly for SQUAD to pool these subjects.
 
     Both halves mirror a check SQUAD makes for itself. The flags, because it
     compares them and raises "Eddy output inconsistency detected!". The
     acquisition fields, because it compares those too and raises "Inconsistency
-    detected in eddy input data in <description>!" -- and because it takes the
-    protocol from whichever subject is listed first and stacks the per-shell CNR
-    and outlier arrays on top of each other, so a difference it happened not to
-    check would be a silently mislabelled group report rather than an error.
+    detected in eddy input data in <description>!".
 
-    Values are compared exactly, because SQUAD compares them exactly. A key that
-    is more forgiving than the tool it feeds pools subjects the tool then
-    refuses, which fails the whole study instead of one cohort.
+    Only the fields SQUAD compares *exactly* are in the key, because only those
+    partition the subjects: the two it compares with a tolerance are not
+    transitive and cannot be a dictionary key at all, so they are applied
+    afterwards, against a reference subject, the way SQUAD applies them (see
+    ``tolerance_gaps``). The two it does not compare are disclosed, not enforced.
     """
     enabled = ",".join(name[3:-5] for name in SQUAD_FLAGS if flags[name]) or "none"
     parts = ["flags=" + enabled]
-    parts.extend("%s=%s" % (name, canonical(value))
-                 for name, value in sorted(acquisition.items()))
+    parts.extend("%s=%s" % (name, canonical(acquisition.get(name)))
+                 for name in sorted(fields))
     return "|".join(parts)
 
 
@@ -185,11 +262,18 @@ def metrics_of(qc: dict) -> Dict[str, Any]:
 
 
 def summarise(qc: dict, labels: Dict[str, str],
-              fields: Sequence[str] = ACQUISITION_FIELDS) -> Dict[str, Any]:
+              fields: Sequence[str] = EXACT_FIELDS) -> Dict[str, Any]:
+    """This subject's database, reduced to what a group run needs to decide.
+
+    ``fields`` is what the signature compares exactly. Everything SQUAD looks at
+    is reported either way, so a reader can see the b-values that were compared
+    within a tolerance and the protocol that was not compared at all.
+    """
     flags = flags_of(qc)
     protocol = protocol_of(qc)
-    acquisition = acquisition_of(qc, fields)
-    signature = signature_of(flags, acquisition)
+    reported = list(dict.fromkeys(list(REPORTED_FIELDS) + list(fields)))
+    acquisition = acquisition_of(qc, reported)
+    signature = signature_of(flags, acquisition, fields)
     summary: Dict[str, Any] = dict(labels)
     summary.update({
         "squad_ready": bool(qc),
@@ -197,7 +281,14 @@ def summarise(qc: dict, labels: Dict[str, str],
         "flag_meanings": {name: FLAG_MEANING[name] for name in SQUAD_FLAGS},
         "protocol": protocol,
         "acquisition": acquisition,
-        "field_meanings": {name: FIELD_MEANING.get(name, name) for name in fields},
+        "field_meanings": {name: FIELD_MEANING.get(name, name) for name in reported},
+        "compared": {
+            "exact": list(fields),
+            "tolerant": {name: {"atol": atol, "rtol": rtol}
+                         for name, (atol, rtol) in sorted(TOLERANT_FIELDS.items())
+                         if name not in fields},
+            "disclosed": [name for name in DISCLOSED_FIELDS if name not in fields],
+        },
         "signature": signature,
         "signature_hash": hashlib.sha1(signature.encode()).hexdigest()[:8],
         "metrics": metrics_of(qc),

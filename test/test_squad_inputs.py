@@ -15,7 +15,8 @@ BASE = {
     "data_vox_size": [2.0, 2.0, 2.0],
     "data_protocol": [[1500, 8], [3000, 8]],
     "data_unique_pes": [[0, 1, 0], [0, -1, 0]],
-    "data_eddy_para": [[0, 1, 0, 0.0959], [0, -1, 0, 0.0959]],
+    # Flat, as eddy_quad writes it: one [x, y, z, readout] row after another.
+    "data_eddy_para": [0.0, 1.0, 0.0, 0.0959, 0.0, -1.0, 0.0, 0.0959],
     "qc_mot_abs": 0.4, "qc_mot_rel": 0.2, "qc_outliers_tot": 1.0,
     "qc_params_flag": True, "qc_s2v_params_flag": True, "qc_field_flag": True,
     "qc_ol_flag": True, "qc_cnr_flag": True, "qc_rss_flag": False,
@@ -247,7 +248,7 @@ class TestCohorts(StagingCase):
     def test_differing_acquisition_parameters_split_the_cohort(self):
         # The real failure: same eddy options, different readout time. SQUAD
         # compares the eddy input data and refuses the study over it.
-        other = [[0, 1, 0, 0.1043], [0, -1, 0, 0.1043]]
+        other = [0.0, 1.0, 0.0, 0.1043, 0.0, -1.0, 0.0, 0.1043]
         folders = [self.dataset("a", qc(), summary={"subject": "a"}),
                    self.dataset("b", qc(), summary={"subject": "b"}),
                    self.dataset("c", qc(data_eddy_para=other),
@@ -257,14 +258,99 @@ class TestCohorts(StagingCase):
         self.assertIn("topup acquisition parameters", report["excluded"][0]["reason"])
         self.assertIn("0.1043", report["excluded"][0]["reason"])
 
-    def test_the_comparison_is_exact(self):
+    def test_a_b_value_five_apart_pools_because_squad_pools_it(self):
+        # squad_db.py compares the b-values with np.allclose(atol=20), so 1495
+        # and 1500 are one cohort to it. Splitting them here would refuse a
+        # study SQUAD accepts -- which is how a two-site study became two group
+        # reports of two subjects each.
         folders = [self.dataset("a", qc(), summary={"subject": "a"}),
                    self.dataset("b", qc(), summary={"subject": "b"}),
                    self.dataset("c", qc(data_unique_bvals=[1495, 3000]),
                                 summary={"subject": "c"})]
         report = self.run_staging(self.config(folders))
+        self.assertEqual(report["chosen"]["n_subjects"], 3)
+        self.assertEqual(report["excluded"], [])
+
+    def test_a_b_value_beyond_the_tolerance_still_splits(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"}),
+                   self.dataset("c", qc(data_unique_bvals=[1530, 3000]),
+                                summary={"subject": "c"})]
+        report = self.run_staging(self.config(folders))
         self.assertEqual(report["excluded"][0]["subjects"], ["c"])
         self.assertIn("shell b-values", report["excluded"][0]["reason"])
+        self.assertIn("more than SQUAD tolerates", report["excluded"][0]["reason"])
+
+    def test_a_voxel_size_within_one_percent_pools(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(data_vox_size=[2.01, 2.0, 2.0]),
+                                summary={"subject": "b"})]
+        self.assertEqual(self.run_staging(self.config(folders))["excluded"], [])
+
+    def test_a_voxel_size_beyond_it_does_not(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"}),
+                   self.dataset("c", qc(data_vox_size=[2.5, 2.0, 2.0]),
+                                summary={"subject": "c"})]
+        report = self.run_staging(self.config(folders))
+        self.assertEqual(report["excluded"][0]["subjects"], ["c"])
+        self.assertIn("voxel size", report["excluded"][0]["reason"])
+
+    def test_the_tolerance_is_measured_from_the_first_subject_as_squad_measures_it(self):
+        # 1490, 1500 and 1515 are each within 20 of a neighbour but the ends are
+        # 25 apart. SQUAD compares every subject against the first folder in the
+        # list, so that is where the line falls here too.
+        folders = [self.dataset("a", qc(data_unique_bvals=[1490, 3000]),
+                                summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"}),
+                   self.dataset("c", qc(data_unique_bvals=[1515, 3000]),
+                                summary={"subject": "c"})]
+        report = self.run_staging(self.config(folders))
+        self.assertEqual(report["chosen"]["subjects"], ["a", "b"])
+        self.assertEqual(report["excluded"][0]["subjects"], ["c"])
+
+    def test_the_protocol_squad_never_compares_does_not_split_a_cohort(self):
+        # Same volumes, distributed differently between the shells. squad_db.py
+        # does not compare data_protocol at all.
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(data_protocol=[[1500, 4], [3000, 12]]),
+                                summary={"subject": "b"})]
+        report = self.run_staging(self.config(folders))
+        self.assertEqual(report["chosen"]["n_subjects"], 2)
+        self.assertEqual(report["excluded"], [])
+
+    def test_but_it_is_disclosed_rather_than_passed_over_in_silence(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(data_protocol=[[1500, 4], [3000, 12]]),
+                                summary={"subject": "b"})]
+        disclosed = self.run_staging(self.config(folders))["chosen"]["disclosed_differences"]
+        self.assertEqual([d["field"] for d in disclosed], ["data_protocol"])
+        self.assertEqual(sorted(s for value in disclosed[0]["values"]
+                                for s in value["subjects"]), ["a", "b"])
+
+    def test_the_report_says_how_each_field_was_compared(self):
+        folders = [self.dataset("a", qc()), self.dataset("b", qc())]
+        comparison = self.run_staging(self.config(folders))["comparison"]
+        self.assertEqual(comparison["exact"], list(si.EXACT_FIELDS))
+        self.assertEqual(sorted(comparison["tolerant"]),
+                         ["data_unique_bvals", "data_vox_size"])
+        self.assertEqual(comparison["disclosed"], list(si.DISCLOSED_FIELDS))
+
+    def test_a_tolerant_field_named_in_signature_fields_is_compared_exactly(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"}),
+                   self.dataset("c", qc(data_unique_bvals=[1495, 3000]),
+                                summary={"subject": "c"})]
+        widened = list(si.EXACT_FIELDS) + ["data_unique_bvals"]
+        report = self.run_staging(self.config(
+            folders, signature_fields=" ".join(widened)))
+        self.assertEqual(report["excluded"][0]["subjects"], ["c"])
+        self.assertIn("shell b-values differs", report["excluded"][0]["reason"])
+        # ...and it is not then also reported as a tolerance gap.
+        self.assertNotIn("more than SQUAD tolerates", report["excluded"][0]["reason"])
+        self.assertEqual(report["comparison"]["tolerant"], {"data_vox_size":
+            {"atol": si.TOLERANT_FIELDS["data_vox_size"][0],
+             "rtol": si.TOLERANT_FIELDS["data_vox_size"][1]}})
 
     def test_signature_fields_can_narrow_what_is_compared(self):
         folders = [self.dataset("a", qc(), summary={"subject": "a"}),
@@ -444,7 +530,240 @@ class TestStaging(StagingCase):
         self.assertEqual(self.run_staging(self.config(folders))["missing_reports"], [])
 
 
+class TestPoolAcrossAcquisition(StagingCase):
+    """The opt-in way past the one difference no rearrangement of the key fixes.
+
+    Two sites run the same protocol; their readout times differ in the sixth
+    decimal and their acqparams rows are in the other order. squad_db.py
+    compares data_eddy_para exactly, so it refuses the study -- and no cohort key
+    that mirrors SQUAD can pool them. pool_across_acquisition rewrites the staged
+    copies, within stated bounds, and says so everywhere it can.
+    """
+
+    # The real values and the real shape, from a two-site study: flat, and
+    # with the two sites listing their blip-up and blip-down rows in the
+    # opposite order.
+    SITE_A = [0.0, 1.0, 0.0, 0.0959097, 0.0, -1.0, 0.0, 0.0959097]
+    SITE_B = [0.0, -1.0, 0.0, 0.0965997, 0.0, 1.0, 0.0, 0.0965997]
+
+    def two_sites(self, site_b=None):
+        site_b = self.SITE_B if site_b is None else site_b
+        return [self.dataset("a", qc(data_eddy_para=self.SITE_A),
+                             summary={"subject": "a"}),
+                self.dataset("b", qc(data_eddy_para=self.SITE_A),
+                             summary={"subject": "b"}),
+                self.dataset("c", qc(data_eddy_para=site_b), summary={"subject": "c"}),
+                self.dataset("d", qc(data_eddy_para=site_b), summary={"subject": "d"})]
+
+    def test_the_flat_table_eddy_quad_actually_writes_is_read(self):
+        # The shape a real qc.json carries: 4N numbers, not N rows of 4. Reading
+        # only the nested form made harmonisation refuse every real study with
+        # "not a table of [x, y, z, readout] rows" -- a parser failure wearing
+        # the words of an acquisition difference.
+        self.assertEqual(
+            si.acqp_rows([0.0, -1.0, 0.0, 0.0959097, 0.0, 1.0, 0.0, 0.0959097]),
+            [((0.0, -1.0, 0.0), 0.0959097), ((0.0, 1.0, 0.0), 0.0959097)])
+
+    def test_the_nested_table_is_read_too(self):
+        self.assertEqual(
+            si.acqp_rows([[0.0, -1.0, 0.0, 0.0959097], [0.0, 1.0, 0.0, 0.0959097]]),
+            [((0.0, -1.0, 0.0), 0.0959097), ((0.0, 1.0, 0.0), 0.0959097)])
+
+    def test_something_that_is_not_an_acqparams_table_is_refused(self):
+        for value in ([0.0, 1.0, 0.0], [0.0, 1.0, 0.0, 0.09, 0.0], "axial", [], None):
+            self.assertIsNone(si.acqp_rows(value), value)
+
+    def test_the_real_two_site_difference_harmonises(self):
+        # MCG vs UMN, exactly as their qc.json carries it: the same two
+        # phase-encode vectors in the opposite row order, and readout times
+        # 0.00069 s apart.
+        mcg = [0.0, -1.0, 0.0, 0.0959097, 0.0, 1.0, 0.0, 0.0959097]
+        umn = [0.0, 1.0, 0.0, 0.0965997, 0.0, -1.0, 0.0, 0.0965997]
+        self.assertEqual(si.harmonisable(mcg, umn, si.DEFAULT_READOUT_TOLERANCE), "")
+
+    def test_on_by_default_the_two_sites_are_one_cohort(self):
+        # The readouts differ by 0.719%, which is one acquisition stated as
+        # TotalReadoutTime at one site and as 1/BWPPE at the other. Leaving this
+        # off by default reported on half the study unless someone knew to ask.
+        report = self.run_staging(self.config(self.two_sites()))
+        self.assertEqual(report["chosen"]["n_subjects"], 4)
+        self.assertEqual(report["excluded"], [])
+        self.assertEqual(len(report["chosen"]["harmonised"]["per_subject"]), 2)
+
+    def test_it_can_still_be_turned_off(self):
+        report = self.run_staging(self.config(self.two_sites(),
+                                              pool_across_acquisition=False))
+        self.assertEqual(report["chosen"]["n_subjects"], 2)
+        self.assertIn("topup acquisition parameters", report["excluded"][0]["reason"])
+        self.assertEqual(report["chosen"]["harmonised"], {})
+
+    def test_on_request_the_two_sites_become_one_cohort(self):
+        report = self.run_staging(self.config(self.two_sites(),
+                                              pool_across_acquisition=True))
+        self.assertEqual(report["chosen"]["n_subjects"], 4)
+        self.assertEqual(sorted(report["chosen"]["subjects"]), ["a", "b", "c", "d"])
+        self.assertEqual(report["excluded"], [])
+
+    def test_every_original_value_is_recorded(self):
+        report = self.run_staging(self.config(self.two_sites(),
+                                              pool_across_acquisition=True))
+        harmonised = report["chosen"]["harmonised"]
+        self.assertEqual(harmonised["field"], "data_eddy_para")
+        self.assertIn(harmonised["reference"], (self.SITE_A, self.SITE_B))
+        rewritten = harmonised["per_subject"]
+        self.assertEqual(sorted(rewritten), ["a", "b"] if harmonised["reference"]
+                         == self.SITE_B else ["c", "d"])
+        for original in rewritten.values():
+            self.assertNotEqual(original, harmonised["reference"])
+
+    def test_the_staged_copies_carry_the_reference_value_and_the_inputs_do_not(self):
+        report = self.run_staging(self.config(self.two_sites(),
+                                              pool_across_acquisition=True))
+        reference = report["chosen"]["harmonised"]["reference"]
+        with open(report["list_file"]) as fh:
+            folders = [line.strip() for line in fh if line.strip()]
+        self.assertEqual(len(folders), 4)
+        for folder in folders:
+            with open(os.path.join(folder, "qc.json")) as fh:
+                self.assertEqual(json.load(fh)["data_eddy_para"], reference)
+        # The input dataset is the record of what was acquired; it is read-only
+        # on brainlife and must stay untouched here too.
+        originals = set()
+        for name in ("a", "b", "c", "d"):
+            with open(os.path.join(self.root, "inputs", name, "qc.json")) as fh:
+                originals.add(json.dumps(json.load(fh)["data_eddy_para"]))
+        self.assertEqual(len(originals), 2)
+
+    def test_a_different_phase_encode_vector_is_refused(self):
+        # Left-right against anterior-posterior is a different acquisition, not
+        # the same one described differently.
+        other = [1.0, 0.0, 0.0, 0.0959097, -1.0, 0.0, 0.0, 0.0959097]
+        report = self.run_staging(self.config(self.two_sites(other),
+                                              pool_across_acquisition=True))
+        self.assertEqual(report["chosen"]["n_subjects"], 2)
+        self.assertIn("not harmonised", report["excluded"][0]["reason"])
+        self.assertIn("phase-encode vectors themselves differ",
+                      report["excluded"][0]["reason"])
+
+    def test_a_readout_beyond_the_tolerance_is_refused(self):
+        far = [0.0, 1.0, 0.0, 0.5, 0.0, -1.0, 0.0, 0.5]
+        report = self.run_staging(self.config(self.two_sites(far),
+                                              pool_across_acquisition=True))
+        self.assertEqual(report["chosen"]["n_subjects"], 2)
+        self.assertIn("readout times differ by", report["excluded"][0]["reason"])
+        self.assertIn("pool_readout_tolerance", report["excluded"][0]["reason"])
+
+    def test_the_readout_tolerance_can_be_narrowed(self):
+        # 0.1% -- tighter than the 0.719% these two sites differ by.
+        report = self.run_staging(self.config(self.two_sites(),
+                                              pool_across_acquisition=True,
+                                              pool_readout_tolerance=0.001))
+        self.assertEqual(report["chosen"]["n_subjects"], 2)
+        self.assertIn("readout times differ by", report["excluded"][0]["reason"])
+
+    def test_a_cohort_that_differs_in_more_than_the_parameters_is_left_alone(self):
+        # The option is about one field. A subject with no slice-to-volume
+        # metrics is excluded as it always was, and nothing is rewritten.
+        folders = self.two_sites()
+        folders.append(self.dataset("e", qc(qc_s2v_params_flag=False,
+                                            data_eddy_para=self.SITE_A),
+                                    summary={"subject": "e"}))
+        report = self.run_staging(self.config(folders, pool_across_acquisition=True))
+        self.assertEqual(report["chosen"]["n_subjects"], 4)
+        self.assertEqual(report["excluded"][0]["subjects"], ["e"])
+        self.assertIn("slice-to-volume", report["excluded"][0]["reason"])
+        self.assertNotIn("not harmonised", report["excluded"][0]["reason"])
+
+    def test_a_differing_number_of_series_is_refused(self):
+        single = [0.0, 1.0, 0.0, 0.0959097]
+        report = self.run_staging(self.config(self.two_sites(single),
+                                              pool_across_acquisition=True))
+        self.assertEqual(report["chosen"]["n_subjects"], 2)
+        self.assertIn("2 and 1 acquisition parameter row(s)",
+                      report["excluded"][0]["reason"])
+
+    def test_nothing_to_harmonise_leaves_the_report_empty_handed(self):
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"})]
+        report = self.run_staging(self.config(folders, pool_across_acquisition=True))
+        self.assertEqual(report["chosen"]["harmonised"], {})
+        self.assertEqual(report["chosen"]["n_subjects"], 2)
+
+
+class TestReadoutBound(unittest.TestCase):
+    """The 1.75% bound, pinned to what was measured on real multi-site data.
+
+    Upper side: the same acquisition read two ways differs by 1/(N-1), where N is
+    ReconMatrixPE. Lower side: the closest pair of genuinely different scanners
+    in the study is 3.093% apart. The bound has to sit between them.
+    """
+
+    REFERENCE = 0.0959097
+
+    def acqp(self, readout):
+        return [0.0, -1.0, 0.0, readout, 0.0, 1.0, 0.0, readout]
+
+    def gap(self, fraction, tolerance=None):
+        if tolerance is None:
+            tolerance = si.DEFAULT_READOUT_TOLERANCE
+        return si.harmonisable(self.acqp(self.REFERENCE),
+                               self.acqp(self.REFERENCE * (1.0 + fraction)),
+                               tolerance)
+
+    def artefact(self, n):
+        """TotalReadoutTime against 1/BWPPE at ReconMatrixPE n, as a fraction."""
+        return 1.0 / (n - 1)
+
+    def test_every_matrix_the_study_uses_merges(self):
+        # 0.719%, 0.775%, 0.787%.
+        for n in (140, 130, 128):
+            self.assertEqual(self.gap(self.artefact(n)), "", "N=%d" % n)
+
+    def test_a_64_line_matrix_still_merges(self):
+        self.assertEqual(self.gap(self.artefact(64)), "")      # 1.587%
+
+    def test_the_edge_sits_between_n_59_and_n_58(self):
+        self.assertEqual(self.gap(self.artefact(59)), "")      # 1.724%
+        self.assertNotEqual(self.gap(self.artefact(58)), "")   # 1.754%
+
+    def test_the_closest_real_scanner_difference_is_refused(self):
+        self.assertNotEqual(self.gap(0.1 / 0.097 - 1.0), "")               # 3.093%
+        self.assertNotEqual(self.gap(0.0993301 / 0.0959097 - 1.0), "")     # 3.566%
+
+    def test_a_different_scanner_entirely_is_refused(self):
+        self.assertNotEqual(self.gap(0.129008 / 0.0959097 - 1.0), "")      # 34.5%
+
+    def test_the_refusal_states_percentages_not_seconds(self):
+        reason = self.gap(0.1 / 0.097 - 1.0)
+        self.assertIn("3.09%", reason)
+        self.assertIn("1.75%", reason)
+        self.assertNotIn(" s,", reason)
+
+    def test_the_bound_is_relative_so_it_scales_with_the_readout(self):
+        # One millisecond is inside the bound on a 0.12 s readout and outside it
+        # on a 0.02 s one. An absolute bound cannot say that.
+        for reference, merges in ((0.12, True), (0.02, False)):
+            reason = si.harmonisable(self.acqp(reference),
+                                     self.acqp(reference + 0.001),
+                                     si.DEFAULT_READOUT_TOLERANCE)
+            self.assertEqual(reason == "", merges, "%g s reference" % reference)
+
+
 class TestGroupingVariable(StagingCase):
+    def variable_run(self, table_text, expect=0, **extra):
+        """Stage two subjects against a participants-style table."""
+        path = os.path.join(self.root, "participants.tsv")
+        with open(path, "w") as fh:
+            fh.write(table_text)
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"})]
+        return self.run_staging(
+            self.config(folders, grouping_variable=path, **extra), expect=expect)
+
+    def variable_lines(self):
+        with open(os.path.join(self.work, "variable.txt")) as fh:
+            return [line.strip() for line in fh if line.strip()]
+
     def two_subjects(self):
         return [self.dataset("a", qc(), summary={"subject": "sub-01"}),
                 self.dataset("b", qc(), summary={"subject": "sub-02"})]
@@ -518,6 +837,47 @@ class TestGroupingVariable(StagingCase):
         self.assertEqual(report["chosen"]["subjects"], ["sub-01", "sub-02"])
         with open(report["variable_file"]) as fh:
             self.assertEqual(fh.read().split(), ["group", "0", "0", "1"])
+
+    def test_named_classes_are_encoded_because_squad_reads_numbers(self):
+        # eddy_squad does np.genfromtxt(gVar, dtype=None, names=True), so a site
+        # name raises "Cannot convert string 'MCG'" before a plot is drawn.
+        report = self.variable_run("participant_id\tsite\n"
+                                   "a\tMCG\nb\tUMN\n")
+        self.assertEqual(report["variable"]["encoding"], {"0": "MCG", "1": "UMN"})
+        self.assertEqual(self.variable_lines(), ["site", "0", "0", "1"])
+
+    def test_the_codes_are_sorted_so_they_are_stable_across_runs(self):
+        report = self.variable_run("participant_id\tsite\n"
+                                   "a\tUMN\nb\tMCG\n")
+        self.assertEqual(report["variable"]["encoding"], {"0": "MCG", "1": "UMN"})
+        # a is UMN, b is MCG -- the codes follow the class name, not the row.
+        self.assertEqual(self.variable_lines()[2:], ["1", "0"])
+
+    def test_numbers_are_passed_through_untouched_not_renumbered(self):
+        # An existing table of 0s and 1s has to reach SQUAD exactly as written.
+        report = self.variable_run("participant_id\tgroup\na\t7\nb\t9\n")
+        self.assertEqual(report["variable"]["encoding"], {})
+        self.assertEqual(self.variable_lines()[2:], ["7", "9"])
+
+    def test_a_continuous_variable_of_names_is_refused_not_encoded(self):
+        # Encoding names to 0/1 and fitting a regression through them would be
+        # a meaningless number rather than an error.
+        report = self.variable_run("participant_id\tsite\na\tMCG\nb\tUMN\n",
+                                   expect=1, variable_is_continuous=True)
+        self.assertIn("marked continuous", report["error"])
+        self.assertIn("MCG", report["error"])
+
+    def test_a_squad_format_file_of_names_is_encoded_too(self):
+        # That path copies the file through verbatim, which for a file of names
+        # would hand FSL the same crash.
+        path = os.path.join(self.root, "variable.txt")
+        with open(path, "w") as fh:
+            fh.write("site\n0\nMCG\nUMN\n")
+        folders = [self.dataset("a", qc(), summary={"subject": "a"}),
+                   self.dataset("b", qc(), summary={"subject": "b"})]
+        report = self.run_staging(self.config(folders, grouping_variable=path))
+        self.assertEqual(report["variable"]["encoding"], {"0": "MCG", "1": "UMN"})
+        self.assertEqual(self.variable_lines(), ["site", "0", "0", "1"])
 
     def test_a_missing_variable_file_is_named(self):
         report = self.run_staging(

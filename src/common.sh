@@ -165,6 +165,17 @@ setup_threads() {
     export OMP_NUM_THREADS="$NTHREADS"
     export ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS="$NTHREADS"
     export MRTRIX_NTHREADS="$NTHREADS"
+    # numexpr -- which pandas imports, and eddy_squad's plotting therefore drags
+    # in -- refuses to start more than NUMEXPR_MAX_THREADS and prints an "Error."
+    # to stderr when the machine has more cores than that. Its own ceiling is 64,
+    # so setting it any higher reproduces the message rather than silencing it.
+    # Left unset, a 72-core host prints that line in the middle of the group run,
+    # where it reads like a failure and is not.
+    if [ "$NTHREADS" -gt 64 ] 2>/dev/null; then
+        export NUMEXPR_MAX_THREADS=64
+    else
+        export NUMEXPR_MAX_THREADS="$NTHREADS"
+    fi
     export ANTS_RANDOM_SEED="${ANTS_RANDOM_SEED:-1}"
     log "using $NTHREADS threads"
 }

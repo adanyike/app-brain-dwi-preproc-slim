@@ -194,5 +194,20 @@ check "run_identifier honours TASK_ID" "abc123" "$(TASK_ID=abc123 run_identifier
 check "run_identifier falls back to the run directory" "$(basename "$PWD")" \
       "$(TASK_ID='' run_identifier)"
 
+# ----------------------------------------------------------- thread caps ----
+# numexpr refuses to start more threads than NUMEXPR_MAX_THREADS and prints an
+# "Error." to stderr when the host has more cores than that -- mid-run, where it
+# reads like a failure. Its own ceiling is 64, so the export has to clamp.
+threads_env() {  # threads_env <nthreads> -> the NUMEXPR_MAX_THREADS it exports
+    ( echo '{"nthreads": '"$1"'}' > "$TMP/config.json"
+      CONFIG="$TMP/config.json" setup_threads >/dev/null 2>&1
+      printf '%s' "$NUMEXPR_MAX_THREADS" )
+}
+check "numexpr cap follows a small thread count" "8"  "$(threads_env 8)"
+check "numexpr cap is clamped at its own ceiling" "64" "$(threads_env 72)"
+check "numexpr cap at the boundary"              "64" "$(threads_env 64)"
+
+CONFIG="$TMP/config.json"
+
 printf '%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

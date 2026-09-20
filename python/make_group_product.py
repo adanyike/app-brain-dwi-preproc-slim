@@ -129,6 +129,42 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "QC metrics NOT available for this cohort, because eddy was not "
                 "run with the corresponding option: %s." % "; ".join(off)})
 
+    harmonised = chosen.get("harmonised") or {}
+    if harmonised:
+        per_subject = harmonised.get("per_subject") or {}
+        messages.append({"type": "warning", "msg":
+            "pool_across_acquisition: %d subject(s) were pooled by rewriting "
+            "their %s in this App's own copy of the QC database to %s -- the "
+            "value from %s -- because eddy_squad compares that field exactly and "
+            "would otherwise have refused the study. The input datasets were not "
+            "changed. Original values: %s. Readout times were required to agree "
+            "within %s and the phase-encode vectors to be identical. "
+            "Distortion-derived indices (qc_vox_displ_std) depend on these "
+            "parameters and are NOT comparable across the harmonised subjects; "
+            "motion, outlier and CNR indices do not depend on them and are."
+            % (len(per_subject),
+               harmonised.get("meaning", harmonised.get("field", "acquisition parameters")),
+               json.dumps(harmonised.get("reference")),
+               harmonised.get("reference_subject", "the reference cohort"),
+               "; ".join("%s: %s" % (label, json.dumps(value))
+                         for label, value in sorted(per_subject.items())) or "none recorded",
+               # A fraction of the reference readout, not seconds.
+               ("%.3g%%" % (100 * harmonised["readout_tolerance"])
+                if isinstance(harmonised.get("readout_tolerance"), (int, float))
+                else "the configured tolerance"))})
+
+    for difference in chosen.get("disclosed_differences") or []:
+        messages.append({"type": "warning", "msg":
+            "The %s differs within this cohort (%s). eddy_squad does not compare "
+            "that field, so these subjects pool -- but it labels the study-wise "
+            "report from the first subject in the list, so the protocol shown on "
+            "the report describes only some of the subjects behind it."
+            % (difference.get("meaning", difference.get("field", "?")),
+               "; ".join("%s: %s" % (json.dumps(value.get("value")),
+                                     ", ".join(value.get("subjects", [])[:6])
+                                     + ("..." if len(value.get("subjects", [])) > 6 else ""))
+                         for value in difference.get("values", [])))})
+
     # SQUAD counts the subjects it actually read. A disagreement with what was
     # staged means a qc.json was dropped between staging and the group run, and
     # every figure below would be labelled one subject out of step.
@@ -170,6 +206,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                "continuous" if variable.get("continuous") else "categorical",
                variable.get("source", "?"),
                "Scatter" if variable.get("continuous") else "Violin")})
+
+    # eddy_squad can only read numbers, so named classes were encoded. The
+    # report's axes therefore say 0 and 1; this is what they mean.
+    encoding = variable.get("encoding") or {}
+    if encoding:
+        messages.append({"type": "info", "msg":
+            "The '%s' classes were encoded as numbers, because eddy_squad reads "
+            "the grouping file with numpy and a name raises \"Cannot convert "
+            "string\". The group axes in the report are labelled with these "
+            "codes: %s."
+            % (variable.get("name", "?"),
+               "; ".join("%s = %s" % (code, label)
+                         for code, label in sorted(encoding.items())))})
 
     missing_reports = cohorts.get("missing_reports") or []
     if missing_reports:
@@ -226,6 +275,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "cohorts": cohorts.get("cohorts", []),
             "excluded": cohorts.get("excluded", []),
             "grouping_variable": variable,
+            "harmonised": harmonised,
+            "disclosed_differences": chosen.get("disclosed_differences") or [],
+            "comparison": cohorts.get("comparison", {}),
             "single_subject_reports_updated": args.updated_reports,
         },
     }
