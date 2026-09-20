@@ -436,6 +436,29 @@ check "it quotes the series names" grep -q "Brain_dMRI_PA" "$SCEN/log.txt"
 check "and suggests the pair they imply" grep -q 'rpe_dir.*j-' "$SCEN/log.txt"
 check "while saying the name is only a hint" grep -q "free text" "$SCEN/log.txt"
 
+printf '\n--- one unsigned sidecar stops even though the vectors differ ---\n'
+SCEN="$ROOT/15e-mixed-pe-axis"
+mkdir -p "$SCEN"
+python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
+# Only the reverse sidecar loses its sign. The forward series still says
+# j-, so the two vectors differ, nothing collides and the run used to go
+# ahead -- on a sign for rdwi that was assumed rather than read.
+jq 'del(.PhaseEncodingDirection) + {PhaseEncodingAxis: "j"}' \
+    "$SCEN/input/rdwi/dwi.json" > "$SCEN/t" \
+    && mv "$SCEN/t" "$SCEN/input/rdwi/dwi.json"
+base_config "$SCEN/input" '{}' > "$SCEN/config.json"
+( cd "$SCEN" && PATH="$ROOT/bin:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
+    > "$SCEN/log.txt" 2>&1
+check "the run stops rather than trust an assumed sign" test $? -ne 0
+check "the message names the unsigned axis" \
+    grep -q "unsigned PhaseEncodingAxis" "$SCEN/log.txt"
+check "and names the series it came from" \
+    grep -q "for rdwi comes from" "$SCEN/log.txt"
+check "without claiming the vectors collided" bash -c '
+    ! grep -q "no opposing pair at all" "'"$SCEN"'/log.txt"'
+check "it stops before writing acqparams" bash -c '
+    [ ! -e "'"$SCEN"'/output/qc/acqparams.txt" ]'
+
 printf '\n--- a declared slice order, with no SliceTiming to derive from ---\n'
 SCEN="$ROOT/16-declared-order"
 mkdir -p "$SCEN"

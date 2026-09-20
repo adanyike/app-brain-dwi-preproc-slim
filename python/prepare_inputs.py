@@ -392,29 +392,34 @@ def main(argv: Sequence[str] | None = None) -> int:
                  "(%s vs %s); set 'readout_time'/'rreadout_time' explicitly if "
                  "topup looks wrong"
                  % (src_fwd["trt_source"], src_rev["trt_source"]))
+        # The fault here is a sign that was never recorded, and it does not
+        # need the two vectors to collide to be wrong: a pair can look opposed
+        # on paper because one side's sign was assumed positive.  Only the
+        # field that answered tells the two apart, which is why resolve_pe_dir
+        # reports it.
+        unsigned = [label for label, source in (("dwi", src_fwd), ("rdwi", src_rev))
+                    if source["pe_source"] == "PhaseEncodingAxis"]
+        if unsigned:
+            collided = ("; here both series resolved to the same vector %s, "
+                        "so there is no opposing pair at all"
+                        % (pe_fwd,)) if pe_rev == pe_fwd else ""
+            raise PrepError(
+                "the phase-encoding direction for %s comes from an unsigned "
+                "PhaseEncodingAxis, which states the axis but not the direction "
+                "along it, so the sign was assumed rather than read. topup needs "
+                "the two series to be genuinely opposite, and an assumed sign "
+                "cannot establish that%s. Set 'pe_dir' and 'rpe_dir' in "
+                "config.json.%s Which of the two gets the minus sign matters "
+                "less than it looks: naming the pair backwards flips both "
+                "series, topup's field flips with them and the correction is "
+                "unchanged. What must be right is that the two are opposite."
+                % (" and ".join(unsigned), collided,
+                   unsigned_axis_advice(meta_fwd, meta_rev))
+            )
         if pe_rev == pe_fwd:
-            # Two different faults arrive here. One is a sidecar that states the
-            # axis without the direction, so AP and PA resolve identically; the
-            # other is two series that really do share a direction, which is a
-            # data error no message can talk anyone out of. Only the first is
-            # worth explaining, and it is only distinguishable because
-            # resolve_pe_dir reports which field answered.
-            unsigned = [label for label, source in (("dwi", src_fwd), ("rdwi", src_rev))
-                        if source["pe_source"] == "PhaseEncodingAxis"]
-            if unsigned:
-                raise PrepError(
-                    "both series resolved to the same phase-encoding vector %s, "
-                    "so there is no opposing pair for topup. The sidecar gives "
-                    "an unsigned PhaseEncodingAxis for %s, which states the axis "
-                    "but not the direction along it, so AP and PA come out "
-                    "identical. Set 'pe_dir' and 'rpe_dir' in config.json.%s "
-                    "Which of the two gets the minus sign matters less than it "
-                    "looks: naming the pair backwards flips both series, topup's "
-                    "field flips with them and the correction is unchanged. What "
-                    "must be right is that the two are opposite."
-                    % (pe_fwd, " and ".join(unsigned),
-                       unsigned_axis_advice(meta_fwd, meta_rev))
-                )
+            # Two series that really were acquired the same way round: a data
+            # error rather than a sidecar one, and no message talks anyone out
+            # of it.
             raise PrepError(
                 "both series report the same phase-encoding vector %s; topup "
                 "needs opposing directions. Check the sidecars, or set "

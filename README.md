@@ -308,14 +308,20 @@ together and leaves the correction unchanged — but changes the acqparams, whic
 
 The same applies to `pe_dir`/`rpe_dir` set by hand. Some sidecars — Philips
 exports in particular — carry only an unsigned `PhaseEncodingAxis`, which states
-the axis but not the direction along it, so both series resolve identically and
-stage 0 stops rather than guess. It names the cause, quotes both
-`SeriesDescription`s and suggests the pair they imply, but never acts on a name:
-free text is not evidence. Whichever way round you set them, **set it the same
-way for every subject in the study**, or the two conventions produce different
-`data_eddy_para` and split in SQUAD. That one
-is not something `pool_across_acquisition` will paper over: the phase-encode
-vectors differ, so it refuses. Reprocess the odd subjects instead.
+the axis but not the direction along it. Stage 0 stops whenever **either** series
+in a reverse-PE pair took its direction from that field, and does not wait for
+the two to collide: one signed sidecar beside one unsigned one produces vectors
+that differ, but only because the unsigned side's sign was assumed positive
+rather than read. If that series really ran the same way round, topup estimates
+its field from two identically distorted volumes and the output is wrong while
+looking finished. The stop names the cause and the series it came from, quotes
+both `SeriesDescription`s and suggests the pair they imply, but never acts on a
+name: free text is not evidence. Setting `pe_dir`/`rpe_dir` clears it, because
+the sign is then stated rather than assumed. Whichever way round you set them,
+**set it the same way for every subject in the study**, or the two conventions
+produce different `data_eddy_para` and split in SQUAD. That one is not something
+`pool_across_acquisition` will paper over: the phase-encode vectors differ, so it
+refuses. Reprocess the odd subjects instead.
 
 #### Pooling across the acquisition parameters
 
