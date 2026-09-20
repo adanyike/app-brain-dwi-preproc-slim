@@ -15,10 +15,15 @@ So this script:
   mapped the file itself or the folder around it;
 * names each subject from its own ``squad_ready.json``, else brainlife's
   ``_inputs[i].meta.subject``, else the directory it came in;
-* buckets subjects by cohort signature (see eddyqc_summary.py) and picks one
-  cohort, so a study half-processed on GPU nodes yields a group report for the
-  larger half plus an explicit list of who was left out -- rather than SQUAD's
-  ``ValueError: Eddy output inconsistency detected!``;
+* buckets subjects by cohort signature (see eddyqc_summary.py), splits a bucket
+  further where a subject falls outside SQUAD's *tolerance* on the two fields it
+  compares with one, and picks one cohort -- so a study half-processed on GPU
+  nodes yields a group report for the larger half plus an explicit list of who
+  was left out, rather than SQUAD's ``ValueError: Eddy output inconsistency
+  detected!``;
+* optionally (``pool_across_acquisition``) merges cohorts that differ only in
+  the topup acquisition parameters, and only within bounds, rewriting the staged
+  copies to one reference value and recording every original;
 * copies each ``qc.json`` into the work directory, because ``eddy_squad -u``
   writes ``qc_updated.pdf`` *into* the folders it was given and brainlife stages
   its inputs read-only;
@@ -44,18 +49,45 @@ from typing import Any, Dict, List, Sequence, Tuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from eddyqc_summary import (  # noqa: E402  (path set above)
-    ACQUISITION_FIELDS,
+    DISCLOSED_FIELDS,
+    EXACT_FIELDS,
     FIELD_MEANING,
+    REPORTED_FIELDS,
     SQUAD_FLAGS,
     FLAG_MEANING,
+    TOLERANT_FIELDS,
     acquisition_of,
+    as_bool,
+    as_number,
     canonical,
     flags_of,
     metrics_of,
+    numbers_of,
     protocol_of,
     read_json,
     signature_of,
+    tolerance_gaps,
 )
+
+# How far apart two sites' readout times may be, **as a fraction of the reference
+# site's**, before `pool_across_acquisition` refuses to call them the same
+# acquisition.
+#
+# Relative rather than absolute, because the difference this absorbs is itself a
+# ratio. The two ways a sidecar states the readout measure different spans of one
+# echo train -- `TotalReadoutTime` is EES x (N-1), the first echo centre to the
+# last; `1/BandwidthPerPixelPhaseEncode` is EES x N, the whole readout including
+# the final echo spacing -- so they differ by exactly one echo spacing, which as a
+# fraction is 1/(N-1), where N is ReconMatrixPE. Fence posts and rails: N posts
+# have N-1 rails between them, and one rail matters more on a short fence.
+#
+# 1.75% therefore covers every phase-encode matrix down to N=59 (0.72% at N=140,
+# 0.79% at N=128, 1.59% at N=64), which is below any matrix a brain DWI is
+# acquired at. The ceiling is measured too: the closest pair of genuinely
+# different scanners seen in a real multi-site study is 3.09% apart, so the bound
+# keeps 1.34 percentage points of daylight beneath a difference that must never
+# be merged.
+DEFAULT_READOUT_TOLERANCE = 0.0175
 
 # config.json keys that may carry the QUAD folders, in the order they are
 # consulted. `eddyqc` is what the group App maps; the others let the same code
@@ -223,25 +255,59 @@ def unique_labels(labels: Sequence[str]) -> List[str]:
 # --------------------------------------------------------------- subjects ----
 
 def signature_fields(config: dict) -> List[str]:
-    """Which acquisition fields the cohort key compares.
+    """Which acquisition fields the cohort key compares *exactly*.
 
-    Every one of them by default, because that is at least as strict as the
-    comparison SQUAD makes, and a key looser than that fails the whole study
-    rather than one cohort. Narrowing it is a deliberate choice: if your FSL
-    tolerates a difference -- a subject with one dropped volume, say -- drop the
-    field here and those subjects pool again.
+    The five SQUAD compares with ``!=`` by default -- no more and no less. A key
+    looser than SQUAD's fails the whole study rather than one cohort; a key
+    stricter than SQUAD's splits a cohort SQUAD would have pooled, and says
+    nothing about having done so. The two fields SQUAD compares with a tolerance
+    are applied separately (see ``bucket``), and the two it does not compare at
+    all are only disclosed.
+
+    Narrowing this is a deliberate choice -- if your FSL tolerates a difference,
+    a subject with one dropped volume say, drop the field here and those subjects
+    pool again. So is widening it: naming ``data_unique_bvals`` or
+    ``data_vox_size`` here compares that field exactly instead of within SQUAD's
+    tolerance, and any other ``data_*`` field can be added to split on something
+    SQUAD does not check at all.
     """
     requested = config.get("signature_fields")
     if requested in (None, "", []):
-        return list(ACQUISITION_FIELDS)
+        return list(EXACT_FIELDS)
     if isinstance(requested, str):
         requested = [name.strip() for name in requested.replace(",", " ").split()]
     return [name for name in requested if name]
 
 
+def tolerant_fields(exact: Sequence[str]) -> List[str]:
+    """The fields still compared within SQUAD's tolerance, given the exact set."""
+    return [name for name in TOLERANT_FIELDS if name not in exact]
+
+
+def pooling_requested(config: dict) -> bool:
+    """Whether to merge cohorts differing only in the acquisition parameters.
+
+    On unless turned off. With a relative bound the only thing this can merge is
+    one acquisition described two ways -- the readout stated as
+    ``TotalReadoutTime`` at one site and as ``1/BandwidthPerPixelPhaseEncode`` at
+    another -- which is the claim the option makes, and every merge is disclosed.
+    Leaving it off by default meant a multi-site study reported on half its
+    subjects unless someone knew to ask, which is the failure this exists to end.
+    """
+    value = config.get("pool_across_acquisition")
+    return True if value in (None, "") else as_bool(value)
+
+
 def collect(config: dict, overrides: Sequence[str]) -> Tuple[List[dict], List[dict]]:
-    """(usable subjects, unusable inputs) -- each as a plain dict for the report."""
+    """(usable subjects, unusable inputs) -- each as a plain dict for the report.
+
+    Each subject carries its whole acquisition, not only the part the signature
+    compares: the tolerance pass and the disclosure both need the fields the key
+    leaves out.
+    """
     fields = signature_fields(config)
+    # Everything SQUAD looks at, plus anything the config asked to compare.
+    reported = list(dict.fromkeys(list(REPORTED_FIELDS) + list(fields)))
     paths = expand_list_file(config_paths(config))
     if not paths:
         raise StagingError(
@@ -270,14 +336,14 @@ def collect(config: dict, overrides: Sequence[str]) -> Tuple[List[dict], List[di
         subject, session = label_for(index, path, qc_json, summary, metas, overrides)
         flags = flags_of(qc)
         protocol = protocol_of(qc)
-        acquisition = acquisition_of(qc, fields)
+        acquisition = acquisition_of(qc, reported)
         raw_labels.append(sanitise(subject if not session else "%s_%s" % (subject, session)))
         subjects.append({
             "input": path,
             "qc_json": qc_json,
             "subject": subject,
             "session": session,
-            "signature": signature_of(flags, acquisition),
+            "signature": signature_of(flags, acquisition, fields),
             "eddy_flags": flags,
             "protocol": protocol,
             "acquisition": acquisition,
@@ -289,16 +355,61 @@ def collect(config: dict, overrides: Sequence[str]) -> Tuple[List[dict], List[di
     return subjects, rejected
 
 
-def bucket(subjects: Sequence[dict]) -> List[dict]:
-    """Subjects grouped by cohort signature, largest cohort first."""
+def split_by_tolerance(members: Sequence[dict], fields: Sequence[str]) -> List[List[dict]]:
+    """Members grouped so that each group is within SQUAD's tolerance of its first.
+
+    SQUAD compares every subject against ``ref_data`` -- the first folder in the
+    list it was given -- so "close enough" is a relation to one subject, not a
+    property of a pair. That makes it non-transitive: b=1490, b=1500 and b=1515
+    are each within 20 of their neighbour and the ends are not within 20 of each
+    other. Resolving it against a reference subject, and starting a new group
+    from the first member that does not fit, is how SQUAD resolves it too.
+    """
+    parts: List[List[dict]] = []
+    remaining = list(members)
+    while remaining:
+        reference = remaining[0]
+        near, far = [reference], []
+        for member in remaining[1:]:
+            gaps = tolerance_gaps(member["acquisition"], reference["acquisition"], fields)
+            (far if gaps else near).append(member)
+        parts.append(near)
+        remaining = far
+    return parts
+
+
+def tolerance_key(reference: dict, fields: Sequence[str]) -> str:
+    """What tells one tolerance group from another: its reference's own values."""
+    return "|".join("%s~%s" % (name, canonical(reference["acquisition"].get(name)))
+                    for name in sorted(fields))
+
+
+def bucket(subjects: Sequence[dict], fields: Sequence[str] = ()) -> List[dict]:
+    """Subjects grouped into cohorts SQUAD would accept, largest cohort first.
+
+    Two passes, because SQUAD makes two kinds of comparison. The signature is a
+    dictionary key, since the fields in it are compared exactly. The tolerant
+    fields (``fields``) cannot be: they are applied within each bucket, against
+    a reference subject, and split it only where a subject is genuinely too far
+    from that reference.
+    """
     groups: Dict[str, List[dict]] = {}
     for subject in subjects:
         groups.setdefault(subject["signature"], []).append(subject)
-    cohorts = [{"signature": signature,
-                "n_subjects": len(members),
-                "subjects": [m["label"] for m in members],
-                "members": members}
-               for signature, members in groups.items()]
+
+    cohorts = []
+    for signature, members in groups.items():
+        parts = split_by_tolerance(members, fields) if fields else [list(members)]
+        for part in parts:
+            # Only a bucket that actually split needs its tolerant values in the
+            # key. Leaving them out otherwise keeps a cohort's hash identical to
+            # the one each of its subjects published for itself.
+            key = signature if len(parts) == 1 else "%s|%s" % (
+                signature, tolerance_key(part[0], fields))
+            cohorts.append({"signature": key,
+                            "n_subjects": len(part),
+                            "subjects": [m["label"] for m in part],
+                            "members": part})
     # Largest first, then alphabetically, so the choice does not depend on the
     # order brainlife happened to stage the datasets in.
     cohorts.sort(key=lambda c: (-c["n_subjects"], c["signature"]))
@@ -311,11 +422,12 @@ def abbreviate(value: Any, limit: int = 60) -> str:
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
-def explain_difference(chosen: dict, other: dict) -> str:
-    """Why these two cohorts cannot be pooled, naming the field and its values.
+def differences_between(chosen: dict, other: dict, exact: Sequence[str],
+                        tolerant: Sequence[str] = ()) -> List[str]:
+    """Every reason SQUAD would not pool these two subjects, in plain terms.
 
-    Compared from the values themselves rather than from the signature string:
-    a reader needs to see that one group has a readout of 0.0959 and the other
+    Compared from the values themselves rather than from the signature string: a
+    reader needs to see that one group has a readout of 0.0959 and the other
     0.1043, not that two hashes differ.
     """
     reasons = []
@@ -324,12 +436,185 @@ def explain_difference(chosen: dict, other: dict) -> str:
         if here != there:
             reasons.append("%s %s" % (FLAG_MEANING[name],
                                       "missing here" if there else "present here"))
-    for name, value in sorted(chosen["acquisition"].items()):
-        if canonical(value) != canonical(other["acquisition"].get(name)):
+    for name in sorted(exact):
+        value, theirs = chosen["acquisition"].get(name), other["acquisition"].get(name)
+        if canonical(value) != canonical(theirs):
             reasons.append("%s differs (%s vs %s)"
                            % (FIELD_MEANING.get(name, name), abbreviate(value),
-                              abbreviate(other["acquisition"].get(name))))
-    return "; ".join(reasons) or "signature differs"
+                              abbreviate(theirs)))
+    for name in tolerance_gaps(other["acquisition"], chosen["acquisition"], tolerant):
+        reasons.append("%s differs by more than SQUAD tolerates (%s vs %s)"
+                       % (FIELD_MEANING.get(name, name),
+                          abbreviate(chosen["acquisition"].get(name)),
+                          abbreviate(other["acquisition"].get(name))))
+    return reasons
+
+
+def explain_difference(chosen: dict, other: dict, exact: Sequence[str] = EXACT_FIELDS,
+                       tolerant: Sequence[str] = ()) -> str:
+    """Why these two cohorts cannot be pooled, naming the field and its values."""
+    return "; ".join(differences_between(chosen, other, exact, tolerant)) or "signature differs"
+
+
+def disclosed_differences(members: Sequence[dict]) -> List[dict]:
+    """Fields that differ within a cohort but that SQUAD never compares.
+
+    Not a reason to split anything -- SQUAD pools these happily. But it labels
+    the group report from the first subject in the list, so a protocol printed
+    on the front page may describe only some of the subjects behind it. Worth
+    saying; never worth enforcing.
+    """
+    out = []
+    for name in DISCLOSED_FIELDS:
+        values: Dict[str, List[str]] = {}
+        for member in members:
+            values.setdefault(canonical(member["acquisition"].get(name)), []).append(
+                member["label"])
+        if len(values) < 2:
+            continue
+        out.append({
+            "field": name,
+            "meaning": FIELD_MEANING.get(name, name),
+            "values": [{"value": json.loads(value), "subjects": labels}
+                       for value, labels in sorted(values.items(),
+                                                   key=lambda kv: (-len(kv[1]), kv[0]))],
+        })
+    return out
+
+
+# ------------------------------------------- pooling across the acquisition ----
+
+def acqp_rows(value: Any) -> List[Tuple[Tuple[float, ...], float]] | None:
+    """``data_eddy_para`` as [(phase-encode vector, readout time)], or None.
+
+    QUAD writes the acqparams table **flat** -- one row of [x, y, z, readout]
+    after another in a single list of 4N numbers, which is what a real qc.json
+    carries. A nested list of rows is accepted too, since that is the shape the
+    same table takes anywhere it has been reshaped before reaching us, and
+    reading only one of the two would be reading the format we invented rather
+    than the one eddy_quad writes.
+
+    None means it is neither, in which case nothing here can say what differs
+    between two of them, and harmonising is out.
+    """
+    if not isinstance(value, (list, tuple)) or not value:
+        return None
+
+    if all(isinstance(row, (list, tuple)) for row in value):
+        rows = []
+        for row in value:
+            numbers = numbers_of(row)
+            if numbers is None or len(numbers) < 4:
+                return None
+            rows.append((tuple(numbers[:3]), numbers[3]))
+        return rows
+
+    numbers = numbers_of(value)
+    if numbers is None or len(numbers) < 4 or len(numbers) % 4:
+        return None
+    return [(tuple(numbers[index:index + 3]), numbers[index + 3])
+            for index in range(0, len(numbers), 4)]
+
+
+def harmonisable(reference: Any, other: Any, tolerance: float) -> str:
+    """Empty when ``other``'s acquisition parameters may be rewritten as
+    ``reference``'s; otherwise the reason they may not.
+
+    The bound is what makes this a description of one acquisition rather than a
+    claim about two: the same phase-encode vectors, and readout times close
+    enough that the difference is how the number was derived rather than what
+    was acquired. Anything else is a different acquisition, and saying otherwise
+    in the staged database would be a lie SQUAD cannot catch.
+    """
+    here, there = acqp_rows(reference), acqp_rows(other)
+    if here is None or there is None:
+        return ("the acquisition parameters are not a table of [x, y, z, readout] "
+                "rows, so there is nothing to compare")
+    if len(here) != len(there):
+        return ("they have %d and %d acquisition parameter row(s): a different "
+                "number of phase-encode series is a different acquisition"
+                % (len(here), len(there)))
+    if {vector for vector, _ in here} != {vector for vector, _ in there}:
+        return ("the phase-encode vectors themselves differ (%s vs %s) -- that is "
+                "a different acquisition, not the same one described differently"
+                % (abbreviate([list(v) for v in sorted({v for v, _ in here})]),
+                   abbreviate([list(v) for v in sorted({v for v, _ in there})])))
+    if any(readout == 0 for _, readout in here):
+        return ("the reference readout time is zero, so there is nothing to "
+                "measure a difference against")
+    # Relative to the reference, which is the side the tolerance is a fraction of
+    # -- the same asymmetry np.allclose has, and the same reference subject.
+    worst = max(abs(y - x) / abs(x) for _, x in here for _, y in there)
+    if worst > tolerance:
+        return ("the readout times differ by %.3g%%, more than "
+                "pool_readout_tolerance (%.3g%%)" % (100 * worst, 100 * tolerance))
+    return ""
+
+
+def pool_across_acquisition(cohorts: List[dict], anchor: dict, tolerance: float,
+                            exact: Sequence[str], tolerant: Sequence[str]
+                            ) -> Tuple[List[dict], Dict[str, Any]]:
+    """Merge into ``anchor`` the cohorts that differ from it only in
+    ``data_eddy_para``, and only within ``tolerance``.
+
+    Returns the remaining cohorts and what was harmonised. A cohort that differs
+    in anything else is left alone -- it is a different acquisition and the
+    ordinary exclusion explains it. One that differs only here but out of bounds
+    is left alone too, carrying the reason it was refused, because the whole
+    value of this option is that its limits are stated.
+    """
+    others = [name for name in exact if name != "data_eddy_para"]
+    reference_member = anchor["members"][0]
+    reference = reference_member["acquisition"].get("data_eddy_para")
+
+    absorbed: List[dict] = []
+    for cohort in cohorts:
+        if cohort is anchor:
+            continue
+        member = cohort["members"][0]
+        if differences_between(reference_member, member, others, tolerant):
+            continue  # a different acquisition in more than its parameters
+        # Every member, not only the one the other fields were read from: a
+        # narrowed signature_fields can leave a cohort whose members do not all
+        # share a data_eddy_para, and rewriting one that was never checked is
+        # exactly the claim this function exists to refuse.
+        refused = next((reason for reason in
+                        (harmonisable(reference, m["acquisition"].get("data_eddy_para"),
+                                      tolerance) for m in cohort["members"])
+                        if reason), "")
+        if refused:
+            cohort["harmonisation_declined"] = refused
+            continue
+        absorbed.append(cohort)
+
+    if not absorbed:
+        return cohorts, {}
+
+    per_subject: Dict[str, Any] = {}
+    for cohort in absorbed:
+        for member in cohort["members"]:
+            per_subject[member["label"]] = member["acquisition"].get("data_eddy_para")
+            # Applied by stage(), to our own copy of the database -- never to the
+            # input, which is read-only and is the record of what was acquired.
+            member["harmonise_to"] = reference
+
+    anchor["members"] = list(anchor["members"]) + [
+        member for cohort in absorbed for member in cohort["members"]]
+    anchor["n_subjects"] = len(anchor["members"])
+    anchor["subjects"] = [member["label"] for member in anchor["members"]]
+    anchor["harmonised"] = {
+        "field": "data_eddy_para",
+        "meaning": FIELD_MEANING["data_eddy_para"],
+        "reference": reference,
+        "reference_subject": reference_member["label"],
+        "readout_tolerance": tolerance,
+        "per_subject": per_subject,
+    }
+
+    gone = {id(cohort) for cohort in absorbed}
+    remaining = [cohort for cohort in cohorts if id(cohort) not in gone]
+    remaining.sort(key=lambda c: (-c["n_subjects"], c["signature"]))
+    return remaining, anchor["harmonised"]
 
 
 def choose(cohorts: Sequence[dict], requested: str, require_homogeneous: bool) -> dict:
@@ -399,6 +684,42 @@ def looks_like_squad_file(path: str) -> bool:
     return len(lines) > 2 and lines[1] in ("0", "1")
 
 
+def encode_values(values: Sequence[str], continuous: bool, name: str
+                  ) -> Tuple[List[str], Dict[str, str]]:
+    """(values eddy_squad can read, {code: original name}).
+
+    SQUAD reads the grouping file with ``np.genfromtxt(gVar, dtype=None,
+    names=True)``, so every line of the column has to parse as one numeric
+    type. A site name gets as far as ``ValueError: Cannot convert string
+    'MCG'`` and takes the whole run down before a plot is drawn -- so names are
+    encoded to integers here, and the mapping is published rather than left in
+    the analyst's head.
+
+    Values that are already numeric are passed through untouched: an existing
+    file of 0s and 1s must reach SQUAD exactly as it was written, not renumbered
+    behind the author's back.
+
+    Classes are numbered in sorted order, so the same table yields the same
+    codes on every run, whatever order brainlife staged the subjects in.
+    """
+    if all(as_number(value) is not None for value in values):
+        return list(values), {}
+
+    names = sorted({str(value) for value in values})
+    if continuous:
+        raise StagingError(
+            "the grouping variable '%s' is marked continuous, but %d of its "
+            "values are not numbers (%s). A regression needs numbers: unset "
+            "variable_is_continuous to treat them as classes, or give the "
+            "column numeric values."
+            % (name or "?", sum(1 for v in values if as_number(v) is None),
+               ", ".join(names[:6]) + ("..." if len(names) > 6 else "")))
+
+    codes = {label: str(index) for index, label in enumerate(names)}
+    return ([codes[str(value)] for value in values],
+            {code: label for label, code in codes.items()})
+
+
 def write_variable_file(path: str, name: str, continuous: bool,
                         members: Sequence[dict], out_path: str) -> dict:
     """Write SQUAD's grouping file for this cohort, in list order.
@@ -417,10 +738,16 @@ def write_variable_file(path: str, name: str, continuous: bool,
                 "are matched by position, so the counts must agree -- or supply "
                 "a table with a subject column instead, which is matched by name."
                 % (path, len(values), len(members)))
-        shutil.copyfile(path, out_path)
+        encoded, encoding = encode_values(values, lines[1] == "1", lines[0])
+        if encoding:
+            with open(out_path, "w") as fh:
+                fh.write("%s\n%s\n" % (lines[0], lines[1]))
+                fh.write("".join("%s\n" % value for value in encoded))
+        else:
+            shutil.copyfile(path, out_path)
         return {"name": lines[0], "continuous": lines[1] == "1",
                 "source": "eddy_squad format file, matched by position",
-                "n_values": len(values), "missing": []}
+                "n_values": len(values), "missing": [], "encoding": encoding}
 
     column, table = read_variable_table(path)
     missing = [m["label"] for m in members
@@ -433,12 +760,13 @@ def write_variable_file(path: str, name: str, continuous: bool,
             % (len(missing), ", ".join(missing[:10]) + ("..." if len(missing) > 10 else "")))
 
     values = [table.get(m["subject"]) or table.get(m["label"]) for m in members]
+    encoded, encoding = encode_values(values, continuous, name or column)
     with open(out_path, "w") as fh:
         fh.write("%s\n%s\n" % (name or column, "1" if continuous else "0"))
-        fh.write("".join("%s\n" % value for value in values))
+        fh.write("".join("%s\n" % value for value in encoded))
     return {"name": name or column, "continuous": continuous,
             "source": "table '%s', matched by subject name" % os.path.basename(path),
-            "n_values": len(values), "missing": []}
+            "n_values": len(values), "missing": [], "encoding": encoding}
 
 
 # ------------------------------------------------------------------ stage ----
@@ -465,6 +793,12 @@ def stage(cohort: dict, work_dir: str) -> Tuple[str, List[str]]:
             # invitation for some future version to try writing there.
             database = read_json(member["qc_json"])
             database["qc_path"] = folder
+            # pool_across_acquisition: the cohort agreed to describe itself with
+            # one set of topup parameters. This is where that is written, and it
+            # is written here and nowhere else -- the copy this app made, not the
+            # input dataset, which stays the record of what was acquired.
+            if member.get("harmonise_to") is not None:
+                database["data_eddy_para"] = member["harmonise_to"]
             with open(os.path.join(folder, "qc.json"), "w") as out:
                 json.dump(database, out, indent=4, sort_keys=True)
             source_pdf = os.path.join(os.path.dirname(member["qc_json"]), "qc.pdf")
@@ -507,8 +841,11 @@ def diagnose(list_file: str) -> int:
         if len(values) < 2:
             continue
         differing += 1
-        print("%s (%s) differs across subjects:"
-              % (name, FIELD_MEANING.get(name, "no description")), file=sys.stderr)
+        print("%s (%s) differs across subjects%s:"
+              % (name, FIELD_MEANING.get(name, "no description"),
+                 " -- but SQUAD compares this one within a tolerance, so it is "
+                 "unlikely to be the refusal" if name in TOLERANT_FIELDS else ""),
+              file=sys.stderr)
         for value, labels in sorted(values.items(), key=lambda kv: -len(kv[1])):
             print("    %-3d subject(s): %s   [%s]"
                   % (len(labels), abbreviate(json.loads(value), 80),
@@ -568,15 +905,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                                             for r in rejected)
                    if rejected else "Check that the inputs are eddy QC datasets."))
 
-        cohorts = bucket(subjects)
+        exact = signature_fields(config)
+        tolerant = tolerant_fields(exact)
+        cohorts = bucket(subjects, tolerant)
         # Hash each cohort's signature the way a single subject hashes its own,
         # so the group page and the subject pages show the same short string.
         for cohort in cohorts:
             cohort["signature_hash"] = hashlib.sha1(
                 cohort["signature"].encode()).hexdigest()[:8]
 
-        chosen = choose(cohorts, str(config.get("cohort") or "").strip(),
-                        bool(config.get("require_homogeneous")))
+        requested = str(config.get("cohort") or "").strip()
+        harmonised: Dict[str, Any] = {}
+        if pooling_requested(config):
+            tolerance = as_number(config.get("pool_readout_tolerance"))
+            if tolerance is None:
+                tolerance = DEFAULT_READOUT_TOLERANCE
+            # Merge into the cohort that would have been reported on anyway, so
+            # the option changes who is pooled and not which acquisition the
+            # group report describes.
+            anchor = next((c for c in cohorts
+                           if requested in (c["signature"], c["signature_hash"])),
+                          cohorts[0]) if requested else cohorts[0]
+            cohorts, harmonised = pool_across_acquisition(
+                cohorts, anchor, tolerance, exact, tolerant)
+
+        chosen = choose(cohorts, requested, bool(config.get("require_homogeneous")))
 
         # The count that matters is the cohort's, not the input list's. Subjects
         # that each land in a cohort of their own pass the check above and would
@@ -599,7 +952,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                              for c in cohorts),
                    explain_difference(chosen["members"][0],
                                       next(c["members"][0] for c in cohorts
-                                           if c["signature"] != chosen["signature"]))
+                                           if c["signature"] != chosen["signature"]),
+                                      exact, tolerant)
                    if len(cohorts) > 1 else "nothing -- there is only one cohort"))
 
         list_file, missing_reports = stage(chosen, args.work_dir)
@@ -626,6 +980,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                        "signature_hash": chosen["signature_hash"],
                        "n_subjects": chosen["n_subjects"],
                        "subjects": chosen["subjects"],
+                       # What was rewritten to make this one cohort, if
+                       # anything, and what every subject's own value was.
+                       "harmonised": harmonised,
+                       # Differences SQUAD does not compare, so they pooled --
+                       # but the group report is labelled from one subject.
+                       "disclosed_differences": disclosed_differences(chosen["members"]),
                        # "the largest cohort" is only meaningful when it *is*
                        # larger. On a tie the pick is deterministic but
                        # arbitrary, and a reader would take the report to
@@ -641,12 +1001,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             "excluded": [
                 {"signature": c["signature"], "signature_hash": c["signature_hash"],
                  "subjects": c["subjects"],
-                 "reason": explain_difference(chosen["members"][0], c["members"][0])}
+                 "reason": explain_difference(chosen["members"][0], c["members"][0],
+                                              exact, tolerant)
+                 + ("; not harmonised: " + c["harmonisation_declined"]
+                    if c.get("harmonisation_declined") else "")}
                 for c in cohorts if c["signature"] != chosen["signature"]],
             "subjects": [{k: m[k] for k in ("label", "subject", "session", "signature",
                                             "metrics", "input")}
                          for m in chosen["members"]],
             "flag_meanings": {name: FLAG_MEANING[name] for name in SQUAD_FLAGS},
+            # How each field was compared, so a cohort split can be read against
+            # the rule that produced it rather than taken on trust.
+            "comparison": {
+                "exact": exact,
+                "tolerant": {name: {"atol": TOLERANT_FIELDS[name][0],
+                                    "rtol": TOLERANT_FIELDS[name][1]}
+                             for name in tolerant},
+                "disclosed": [name for name in DISCLOSED_FIELDS if name not in exact],
+            },
         })
     except StagingError as exc:
         report["error"] = str(exc)
@@ -663,6 +1035,19 @@ def main(argv: Sequence[str] | None = None) -> int:
              ", %d excluded" % sum(len(c["subjects"]) for c in report["excluded"])
              if report["excluded"] else ""),
           file=sys.stderr)
+
+    # Loud, because the staged databases no longer say what the inputs said.
+    if harmonised:
+        print("squad_inputs: WARNING: pool_across_acquisition rewrote %s for %d "
+              "subject(s) to %s, the value from %s, so that they pool. Original "
+              "values: %s. Distortion-derived indices (qc_vox_displ_std) depend "
+              "on those parameters and are not comparable across the harmonised "
+              "subjects; motion, outlier and CNR indices are unaffected."
+              % (harmonised["field"], len(harmonised["per_subject"]),
+                 canonical(harmonised["reference"]), harmonised["reference_subject"],
+                 "; ".join("%s=%s" % (label, canonical(value))
+                           for label, value in sorted(harmonised["per_subject"].items()))),
+              file=sys.stderr)
     return 0
 
 

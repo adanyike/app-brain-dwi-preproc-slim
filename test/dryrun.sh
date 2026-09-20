@@ -411,6 +411,54 @@ check "it stops before eddy ran" bash -c '
 # The Philips case: the sidecar carries no timings, so the excitation order is
 # declared from the protocol instead.  make_test_data.py writes a step-2
 # interleave, so "interleaved" is the truthful declaration for this data.
+printf '\n--- an unsigned PhaseEncodingAxis stops the run and says why ---\n'
+SCEN="$ROOT/15d-unsigned-pe-axis"
+mkdir -p "$SCEN"
+python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
+for j in "$SCEN"/input/*/dwi.json; do
+    # A Philips export: the axis is stated, the direction along it is not, so
+    # both series resolve to plain "j" and topup has no opposing pair.
+    jq 'del(.PhaseEncodingDirection) + {PhaseEncodingAxis: "j"}' "$j" \
+        > "$j.tmp" && mv "$j.tmp" "$j"
+done
+jq '.SeriesDescription = "Brain_dMRI_PA"' "$SCEN/input/dwi/dwi.json" > "$SCEN/t" \
+    && mv "$SCEN/t" "$SCEN/input/dwi/dwi.json"
+jq '.SeriesDescription = "Brain_dMRI_AP"' "$SCEN/input/rdwi/dwi.json" > "$SCEN/t" \
+    && mv "$SCEN/t" "$SCEN/input/rdwi/dwi.json"
+base_config "$SCEN/input" '{}' > "$SCEN/config.json"
+( cd "$SCEN" && PATH="$ROOT/bin:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
+    > "$SCEN/log.txt" 2>&1
+check "the run stops rather than guessing a direction" test $? -ne 0
+check "the message names the unsigned axis" \
+    grep -q "unsigned PhaseEncodingAxis" "$SCEN/log.txt"
+check "and says which keys to set" grep -q "pe_dir. and .rpe_dir" "$SCEN/log.txt"
+check "it quotes the series names" grep -q "Brain_dMRI_PA" "$SCEN/log.txt"
+check "and suggests the pair they imply" grep -q 'rpe_dir.*j-' "$SCEN/log.txt"
+check "while saying the name is only a hint" grep -q "free text" "$SCEN/log.txt"
+
+printf '\n--- one unsigned sidecar stops even though the vectors differ ---\n'
+SCEN="$ROOT/15e-mixed-pe-axis"
+mkdir -p "$SCEN"
+python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
+# Only the reverse sidecar loses its sign. The forward series still says
+# j-, so the two vectors differ, nothing collides and the run used to go
+# ahead -- on a sign for rdwi that was assumed rather than read.
+jq 'del(.PhaseEncodingDirection) + {PhaseEncodingAxis: "j"}' \
+    "$SCEN/input/rdwi/dwi.json" > "$SCEN/t" \
+    && mv "$SCEN/t" "$SCEN/input/rdwi/dwi.json"
+base_config "$SCEN/input" '{}' > "$SCEN/config.json"
+( cd "$SCEN" && PATH="$ROOT/bin:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
+    > "$SCEN/log.txt" 2>&1
+check "the run stops rather than trust an assumed sign" test $? -ne 0
+check "the message names the unsigned axis" \
+    grep -q "unsigned PhaseEncodingAxis" "$SCEN/log.txt"
+check "and names the series it came from" \
+    grep -q "for rdwi comes from" "$SCEN/log.txt"
+check "without claiming the vectors collided" bash -c '
+    ! grep -q "no opposing pair at all" "'"$SCEN"'/log.txt"'
+check "it stops before writing acqparams" bash -c '
+    [ ! -e "'"$SCEN"'/output/qc/acqparams.txt" ]'
+
 printf '\n--- a declared slice order, with no SliceTiming to derive from ---\n'
 SCEN="$ROOT/16-declared-order"
 mkdir -p "$SCEN"
@@ -428,6 +476,34 @@ check "slice-to-volume is back on" grep -q -- "--mporder=6" <<< "$(eddy_cmd)"
 check "slspec passed to eddy"   grep -q -- "--slspec=" <<< "$(eddy_cmd)"
 check "the generated order is the interleave" bash -c '
     [ "$(head -1 "'"$SCEN"'/output/qc/slspec.txt" | tr -s " " | sed "s/^ *//")" = "0 6" ]'
+
+# ...and the multiband factor need not be typed in when the sidecar states it.
+printf '\n--- 16a-multiband-from-the-sidecar ---\n'
+SCEN="$ROOT/16a-mb-from-sidecar"
+mkdir -p "$SCEN"
+python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
+for j in "$SCEN"/input/*/dwi.json; do
+    # A Philips MB-SENSE export: no timings to derive from, and no Siemens
+    # MultibandAccelerationFactor either -- the out-of-plane SENSE factor is the
+    # only statement of the multiband factor on offer. make_test_data.py writes
+    # both fields, so the Siemens one has to go or it wins, correctly, and this
+    # scenario would not be testing the Philips path at all.
+    jq 'del(.SliceTiming) | del(.MultibandAccelerationFactor)
+        + {ParallelAcquisitionTechnique: "MBSENSE",
+           ParallelReductionFactorOutOfPlane: 2}' "$j" > "$j.tmp" && mv "$j.tmp" "$j"
+done
+# Note: no "multiband" key in the config at all.
+base_config "$SCEN/input" '{"eddy_binary":"eddy_cuda10.2","slice_order":"interleaved"}' \
+    > "$SCEN/config.json"
+( cd "$SCEN" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
+    > "$SCEN/log.txt" 2>&1
+check "pipeline exits 0" test $? -eq 0
+check "the factor came from the sidecar, not the config" \
+    grep -q "ParallelReductionFactorOutOfPlane" "$SCEN/log.txt"
+check "and it was applied" grep -q "multiband factor 2" "$SCEN/log.txt"
+check "the slspec has one column per band" bash -c '
+    [ "$(head -1 "'"$SCEN"'/output/qc/slspec.txt" | wc -w)" = "2" ]'
+check "slice-to-volume is on" grep -q -- "--mporder=" <<< "$(eddy_cmd)"
 
 # With timings present the declaration is checked against them, not trusted.
 scenario "16b-declared-agrees" "$ROOT/bin-gpu" '{"eddy_binary":"eddy_cuda10.2","slice_order":"interleaved","multiband":2}'

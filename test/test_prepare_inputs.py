@@ -203,6 +203,154 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(src["pe_source"], "config.json")
         self.assertEqual(src["trt_source"], "config.json")
 
+    def test_the_pe_source_names_the_field_that_answered(self):
+        # PhaseEncodingAxis carries no sign. Reporting it as
+        # PhaseEncodingDirection claims a signed BIDS field was found in exactly
+        # the case where the difference decides whether pe_dir/rpe_dir have to
+        # be set by hand -- a Philips export gives "j" for both series.
+        meta = {"PhaseEncodingAxis": "j", "TotalReadoutTime": 0.0342}
+        _, _, src = pi.series_pe(meta, "", None, "dwi")
+        self.assertEqual(src["pe_source"], "PhaseEncodingAxis")
+        self.assertEqual(src["pe_dir"], "j")
+
+    def test_a_signed_direction_still_wins_and_is_named_as_itself(self):
+        meta = {"PhaseEncodingDirection": "j-", "PhaseEncodingAxis": "j",
+                "TotalReadoutTime": 0.0342}
+        _, _, src = pi.series_pe(meta, "", None, "dwi")
+        self.assertEqual(src["pe_source"], "PhaseEncodingDirection")
+        self.assertEqual(src["pe_dir"], "j-")
+
+    def run_pair(self, meta_fwd, meta_rev, extra=()):
+        """A forward/reverse pair whose sidecars are written verbatim.
+
+        write_series always writes a signed PhaseEncodingDirection, which is the
+        one thing these cases must not have.  Returns the acqparams rows when
+        the run succeeds, so the pairs that must still work can be checked as
+        well as the ones that must not.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            for name, meta in (("fwd", meta_fwd), ("rev", meta_rev)):
+                bval = os.path.join(tmp, name + ".bvals")
+                bvec = os.path.join(tmp, name + ".bvecs")
+                js = os.path.join(tmp, name + ".json")
+                with open(bval, "w") as fh:
+                    fh.write("5 1500\n")
+                with open(bvec, "w") as fh:
+                    fh.write("0.5 0.5\n" * 3)
+                with open(js, "w") as fh:
+                    json.dump(meta, fh)
+                paths.append((bval, bvec, js))
+            (fb, fv, fj), (rb, rv, rj) = paths
+            rc = pi.main(["--bvals", fb, "--bvecs", fv, "--json", fj,
+                          "--nvols", "2",
+                          "--rbvals", rb, "--rbvecs", rv, "--rjson", rj,
+                          "--rnvols", "2", "--outdir", tmp] + list(extra))
+            self.assertEqual(rc, 0)
+            with open(os.path.join(tmp, "acqparams.txt")) as fh:
+                return [line.split() for line in fh if line.strip()]
+
+    def test_an_unsigned_axis_is_named_as_the_cause(self):
+        # Both series resolve to "j" because the axis is stated without a
+        # direction. The old message named the colliding vector and left the
+        # cause to be guessed at.
+        meta = {"PhaseEncodingAxis": "j", "TotalReadoutTime": 0.0342}
+        with self.assertRaises(pi.PrepError) as caught:
+            self.run_pair(meta, meta)
+        message = str(caught.exception)
+        self.assertIn("unsigned PhaseEncodingAxis", message)
+        self.assertIn("dwi and rdwi", message)
+        self.assertIn("'pe_dir' and 'rpe_dir'", message)
+
+    def test_the_series_names_are_quoted_with_the_lines_to_copy(self):
+        fwd = {"PhaseEncodingAxis": "j", "TotalReadoutTime": 0.0342,
+               "SeriesDescription": "Brain_dMRI_PA"}
+        rev = dict(fwd, SeriesDescription="Brain_dMRI_AP")
+        with self.assertRaises(pi.PrepError) as caught:
+            self.run_pair(fwd, rev)
+        message = str(caught.exception)
+        self.assertIn("Brain_dMRI_PA", message)
+        self.assertIn('"pe_dir": "j"', message)
+        self.assertIn('"rpe_dir": "j-"', message)
+        self.assertIn("free text", message)
+
+    def test_names_that_suggest_nothing_get_no_recommendation(self):
+        fwd = {"PhaseEncodingAxis": "j", "TotalReadoutTime": 0.0342,
+               "SeriesDescription": "run1"}
+        rev = dict(fwd, SeriesDescription="run2")
+        with self.assertRaises(pi.PrepError) as caught:
+            self.run_pair(fwd, rev)
+        message = str(caught.exception)
+        self.assertIn("'run1'", message)
+        self.assertNotIn('"pe_dir": "', message)
+
+    def test_two_signed_directions_that_collide_keep_the_original_message(self):
+        # A real data error -- two series acquired the same way round. Nothing
+        # about the sidecar is at fault, so it must not be blamed.
+        meta = {"PhaseEncodingDirection": "j-", "TotalReadoutTime": 0.0342}
+        with self.assertRaises(pi.PrepError) as caught:
+            self.run_pair(meta, meta)
+        message = str(caught.exception)
+        self.assertIn("needs opposing directions", message)
+        self.assertNotIn("unsigned", message)
+
+    def test_one_unsigned_sidecar_stops_even_though_the_vectors_differ(self):
+        # The mixed case: the forward sidecar is signed, the reverse only
+        # states the axis, so its sign is assumed positive and the pair looks
+        # opposed. If that series is really j- too, topup estimates a field
+        # from two identically distorted volumes and the output is wrong while
+        # looking finished.
+        fwd = {"PhaseEncodingDirection": "j-", "TotalReadoutTime": 0.0342}
+        rev = {"PhaseEncodingAxis": "j", "TotalReadoutTime": 0.0342}
+        with self.assertRaises(pi.PrepError) as caught:
+            self.run_pair(fwd, rev)
+        message = str(caught.exception)
+        self.assertIn("unsigned PhaseEncodingAxis", message)
+        self.assertIn("for rdwi comes from", message)
+        self.assertNotIn("dwi and rdwi", message)
+        # nothing collided here, so the message must not claim it did
+        self.assertNotIn("no opposing pair at all", message)
+        self.assertIn("'pe_dir' and 'rpe_dir'", message)
+
+    def test_the_unsigned_side_is_named_whichever_series_it_is(self):
+        fwd = {"PhaseEncodingAxis": "j", "TotalReadoutTime": 0.0342}
+        rev = {"PhaseEncodingDirection": "j-", "TotalReadoutTime": 0.0342}
+        with self.assertRaises(pi.PrepError) as caught:
+            self.run_pair(fwd, rev)
+        message = str(caught.exception)
+        self.assertIn("for dwi comes from", message)
+        self.assertNotIn("rdwi", message.split("Set 'pe_dir'")[0])
+
+    def test_both_unsigned_still_says_there_is_no_opposing_pair(self):
+        meta = {"PhaseEncodingAxis": "j", "TotalReadoutTime": 0.0342}
+        with self.assertRaises(pi.PrepError) as caught:
+            self.run_pair(meta, meta)
+        message = str(caught.exception)
+        self.assertIn("for dwi and rdwi comes from", message)
+        self.assertIn("no opposing pair at all", message)
+
+    def test_an_explicit_direction_clears_the_stop(self):
+        # config.json is the documented way through, and it is a real source:
+        # the sign is then stated by a human rather than assumed by the code.
+        fwd = {"PhaseEncodingDirection": "j-", "TotalReadoutTime": 0.0342}
+        rev = {"PhaseEncodingAxis": "j", "TotalReadoutTime": 0.0342}
+        rows = self.run_pair(fwd, rev, extra=["--rpe-dir", "j"])
+        self.assertEqual({row[1] for row in rows}, {"-1", "1"})
+
+    def test_two_signed_opposed_sidecars_are_untouched(self):
+        # The ordinary case, and the one this must not start refusing.
+        fwd = {"PhaseEncodingDirection": "j-", "TotalReadoutTime": 0.0342}
+        rev = {"PhaseEncodingDirection": "j", "TotalReadoutTime": 0.0342}
+        rows = self.run_pair(fwd, rev)
+        self.assertEqual({row[1] for row in rows}, {"-1", "1"})
+
+    def test_a_name_naming_both_directions_identifies_neither(self):
+        for name, expected in (("Brain_dMRI_PA", "j"), ("Brain_dMRI_AP", "j-"),
+                               ("ep2d_LR", "i"), ("DTI_RL_64dir", "i-"),
+                               ("axial_IS", "k"), ("axial_SI", "k-"),
+                               ("dwi_APPA", ""), ("SHAPE_test", ""), ("", "")):
+            self.assertEqual(pi.pe_code_from_name(name), expected, name)
+
     def test_readout_time_sources_are_tried_in_order(self):
         cases = [
             ({"TotalReadoutTime": 0.0342}, "TotalReadoutTime", 0.0342),

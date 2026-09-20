@@ -34,6 +34,37 @@ study-wise eddy QC (SQUAD) across a whole cohort.
   from it. It is opt-in because it asserts the acquisition rather than
   measuring it, and where `SliceTiming` is present the declaration is compared
   against it and a disagreement stops the run.
+- The multiband factor for a declared `slice_order` is read from the sidecar
+  when it states one -- `MultibandAccelerationFactor` on Siemens,
+  `ParallelReductionFactorOutOfPlane` on Philips MB-SENSE -- rather than having
+  to be typed into `config.json` beside a scanner that already said it. The log
+  names the field it came from, an explicit `multiband` still wins, and anything
+  unreadable falls back to 1 rather than guessing, since a wrong factor builds a
+  slspec for an acquisition this is not.
+- An unsigned `PhaseEncodingAxis` stops stage 0, and says so with the cause
+  rather than the symptom. Some sidecars state the axis without the direction
+  along it, so the sign is assumed rather than read. The stop applies whenever
+  *either* series in a reverse-PE pair took its direction from that field, not
+  only when the two resolve identically: a signed sidecar beside an unsigned one
+  yields vectors that differ, which looks like a proper pair and is not one if
+  that series really ran the same way round -- topup then estimates a field from
+  two identically distorted volumes and the run finishes with wrong output. The
+  message names the unsigned side and which keys to set, quotes both
+  `SeriesDescription`s and suggests the pair they imply -- clearly as a
+  suggestion, since a series name is free text a radiographer can retype and
+  nothing here acts on it. It also says why the choice is less fraught than it
+  looks: naming the pair backwards flips both series, topup's field flips with
+  them and the correction is unchanged, so what must be right is that the two are
+  opposite. An explicit `pe_dir`/`rpe_dir` clears the stop, the sign then being
+  stated rather than assumed; a single-series run is unaffected, having no pair
+  to be opposed. Two *signed* series that genuinely share a direction still get
+  the original message -- that is a data error, not a sidecar one, and the two
+  are only distinguishable because the App now records which field answered.
+- `prep.json` names the field the phase-encoding direction actually came from.
+  It previously reported `PhaseEncodingDirection` even when the value was really
+  the unsigned `PhaseEncodingAxis` -- which is what a Philips export carries, and
+  which gives both series the same direction, so the distinction is exactly what
+  tells you `pe_dir`/`rpe_dir` must be set by hand.
 - `acqp` and `index` accept a hand-made `acqparams.txt` / `index.txt` in place
   of the derived ones, for datasets whose sidecars are incomplete.
 - The topup configuration is chosen from the matrix size, since topup requires
@@ -175,23 +206,65 @@ study-wise eddy QC (SQUAD) across a whole cohort.
   easy to trip, because slice-to-volume correction depends on a GPU being visible
   and the susceptibility field on the subject having a reverse phase-encoded
   series. The group App buckets its inputs by signature, reports on the largest
-  cohort, and names who it left out and why. Volume counts are deliberately left
-  out: SQUAD pools those correctly, and excluding them would discard data for
-  nothing.
-- The signature compares the eddy **input** data as well as the output flags,
-  exactly. Newer FSL releases check the acquisition too -- `Inconsistency
-  detected in eddy input data in topup acquisition parameters!` is what a real
-  study hit -- so a key looser than that comparison pools subjects SQUAD then
-  rejects, failing the whole study instead of splitting one cohort. No rounding
-  with it: b-values of 1495 and 1500 are different cohorts, because they are
-  different to SQUAD. `signature_fields` narrows the comparison where an FSL
-  tolerates a difference, and a refusal the app did not predict is followed by a
-  field-by-field comparison of the staged subjects rather than a traceback.
+  cohort, and names who it left out and why.
+- The signature compares the eddy **input** data as well as the output flags, and
+  it compares each field the way `eddy_qc/SQUAD/squad_db.py` compares it, against
+  the first subject in the list, as SQUAD does. Read from the source of FSL
+  6.0.7.23 and confirmed there against a real two-site study; an older release
+  compared none of it, so the rules below are a property of the FSL you run. Five fields exactly
+  (`data_no_shells`, `data_no_PE_dirs`, `data_no_b0_vols`, `data_no_dw_vols`,
+  `data_eddy_para`) -- `Inconsistency detected in eddy input data in topup
+  acquisition parameters!` is what a real study hit. Two within SQUAD's own
+  tolerance: the shell b-values with `np.allclose(atol=20)` after a length check,
+  so b=1495 pools with b=1500 and b=1530 does not, and the voxel size with
+  `rtol=1e-2`. Two not at all, because SQUAD does not compare them:
+  `data_protocol` and `data_unique_pes` are reported when they differ -- the
+  group report is labelled from one subject -- and never split a cohort.
+- Mirroring that comparison matters in both directions. A key looser than SQUAD's
+  pools subjects it then rejects, failing the whole study instead of splitting one
+  cohort; a key stricter than SQUAD's splits a study it would have pooled, at the
+  same cost and with nothing said about it. `signature_fields` adjusts either way
+  -- drop a field your FSL tolerates, or name a tolerant one to compare it exactly
+  -- and a refusal the app did not predict is followed by a field-by-field
+  comparison of the staged subjects rather than a traceback.
+- `pool_across_acquisition` (**on** by default) is the way past the one difference
+  no signature can soften. Two sites whose readout times differ in the sixth decimal
+  are two cohorts to SQUAD, and the cross-site report it exists to produce cannot
+  be made. Set it and cohorts differing *only* in `data_eddy_para` are merged, by
+  rewriting that field in the App's own staged copies of the databases -- never in
+  the inputs, which stay the record of what was acquired. It is bounded: identical
+  phase-encode vectors, the same number of series, and readout times within
+  `pool_readout_tolerance` -- **1.75% of the reference site's readout**. The bound
+  is relative because the difference it absorbs is a ratio: `TotalReadoutTime` is
+  `EES x (N-1)` and `1/BandwidthPerPixelPhaseEncode` is `EES x N`, so the two
+  ways of stating one readout differ by `1/(N-1)`, where `N` is `ReconMatrixPE` --
+  0.72% at a 140-line matrix, 0.79% at 128, 1.59% at 64. 1.75% covers every matrix
+  down to 59 lines. Both ends were measured on a real multi-site study rather than
+  assumed: the artefacts came in at 0.719% and 0.775% (both resolving to whole
+  matrices, 140 and 130), and the closest pair of genuinely different scanners at
+  3.093%, leaving 1.34 points of daylight. It defaults on because with a relative
+  bound the only thing it can merge is one acquisition described two ways; off by
+  default meant a multi-site study reported on half its subjects unless someone
+  knew to ask. Anything else is a different acquisition and
+  is refused, with the reason on the task page. And it is disclosed, which is the
+  price of the feature: `cohorts.json` records every subject's original value, the
+  log warns, and `product.json` names what it costs -- motion, outlier and CNR
+  indices do not depend on those parameters and stay comparable, the
+  distortion-derived `qc_vox_displ_std` does and does not.
 - The grouping variable is matched to subjects **by name** when given as a
   `participants.tsv`-style table, because `eddy_squad` matches by line position
   and a single excluded subject otherwise shifts every later value onto the wrong
   person. A file already in SQUAD's format is passed through, and refused when
   its value count does not match the cohort.
+- Class names are accepted as grouping values and encoded to integers. SQUAD
+  reads the column with `np.genfromtxt(gVar, dtype=None, names=True)`, so a site
+  name raises `ValueError: Cannot convert string 'MCG'` and takes the run down
+  before a plot is drawn. Names are numbered in sorted order -- stable across
+  runs, whatever order brainlife staged the subjects in -- and the mapping is
+  published in `cohorts.json` and on the task page, because the report's axes can
+  then only say 0 and 1. Numeric values are passed through untouched rather than
+  renumbered, and names combined with `variable_is_continuous` are refused rather
+  than regressed through.
 - Single-subject reports are updated with the group's context by default
   (`update_single_subject_reports`). The QC databases are copied into the work
   directory first, since brainlife stages inputs read-only and `eddy_squad -u`
@@ -202,7 +275,15 @@ study-wise eddy QC (SQUAD) across a whole cohort.
   absent. The library is checked by importing `eddy_qc.SQUAD.squad_update` itself
   rather than by guessing its name, which has changed between releases, and the
   Dockerfile installs `PyPDF2<3` into FSL's interpreter (not the system one,
-  which is not what eddy_squad runs under).
+  which is not what eddy_squad runs under). That probe is judged by its **exit
+  status**, never by whether it printed anything: a successful import is entitled
+  to write to stderr on the way, and one does -- numexpr, pulled in by pandas,
+  announces `nthreads cannot be larger than environment variable
+  "NUMEXPR_MAX_THREADS" (64)` on any host with more cores than that and carries
+  on. Reading that as a failure skipped the update step on every machine with
+  more than 64 cores and blamed a dependency that was present. `setup_threads`
+  now exports `NUMEXPR_MAX_THREADS` as well, clamped to numexpr's own ceiling of
+  64, so the notice stops appearing mid-run where it reads like an error.
 - FSL 6.0.7.x cannot run that step at all: `squad_update` hands `ref_page` an
   empty list where the eddy parameters belong, and it dies there on every run,
   *after* writing the group database. The image fixes it -- the build guards

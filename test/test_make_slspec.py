@@ -135,6 +135,85 @@ class TestGenerateSlspec(unittest.TestCase):
             self.assertEqual(flat, list(range(60)), order)
 
 
+class TestMultibandFromSidecar(unittest.TestCase):
+    """The factor the sidecar already states, so it need not be typed in."""
+
+    def test_philips_states_it_as_the_out_of_plane_sense_factor(self):
+        self.assertEqual(ms.multiband_from_sidecar(
+            {"ParallelAcquisitionTechnique": "MBSENSE",
+             "ParallelReductionFactorOutOfPlane": 4}),
+            (4, "ParallelReductionFactorOutOfPlane"))
+
+    def test_siemens_states_it_by_name(self):
+        self.assertEqual(ms.multiband_from_sidecar(
+            {"MultibandAccelerationFactor": 3}),
+            (3, "MultibandAccelerationFactor"))
+
+    def test_the_unambiguous_field_wins_when_both_appear(self):
+        # ParallelReductionFactorOutOfPlane is the out-of-plane SENSE factor,
+        # which is the multiband factor only for MB-SENSE; the Siemens field
+        # means exactly this and nothing else.
+        self.assertEqual(ms.multiband_from_sidecar(
+            {"MultibandAccelerationFactor": 3,
+             "ParallelReductionFactorOutOfPlane": 4}),
+            (3, "MultibandAccelerationFactor"))
+
+    def test_anything_unreadable_falls_back_to_one(self):
+        # A wrong factor builds a slspec for an acquisition this is not, so
+        # nothing here guesses.
+        for meta in ({}, {"ParallelReductionFactorOutOfPlane": "none"},
+                     {"ParallelReductionFactorOutOfPlane": 0},
+                     {"MultibandAccelerationFactor": None}):
+            self.assertEqual(ms.multiband_from_sidecar(meta), (1, ""), meta)
+
+    def test_it_is_found_inside_a_dicom_dump(self):
+        self.assertEqual(ms.multiband_from_sidecar(
+            {"global": {"const": {"MultibandAccelerationFactor": 2}}}),
+            (2, "global.const.MultibandAccelerationFactor"))
+
+
+class TestGenerateReadsTheSidecar(unittest.TestCase):
+    def build(self, tmp, meta=None, multiband=None, n_slices=140):
+        argv = ["--slice-order", "philips_default", "--n-slices", str(n_slices),
+                "--out", os.path.join(tmp, "s.txt"),
+                "--mb-out", os.path.join(tmp, "mb.txt")]
+        if meta is not None:
+            path = os.path.join(tmp, "sidecar.json")
+            with open(path, "w") as fh:
+                json.dump(meta, fh)
+            argv += ["--json", path]
+        if multiband is not None:
+            argv += ["--multiband", str(multiband)]
+        self.assertEqual(ms.main(argv), 0)
+        with open(os.path.join(tmp, "mb.txt")) as fh:
+            factor = fh.read().strip()
+        with open(os.path.join(tmp, "s.txt")) as fh:
+            columns = len(fh.readline().split())
+        return factor, columns
+
+    def test_the_sidecar_supplies_the_factor_when_config_does_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(
+                self.build(tmp, {"ParallelReductionFactorOutOfPlane": 4}),
+                ("4", 4))
+
+    def test_an_explicit_factor_beats_the_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(
+                self.build(tmp, {"ParallelReductionFactorOutOfPlane": 4},
+                           multiband=2),
+                ("2", 2))
+
+    def test_a_sidecar_that_states_nothing_leaves_it_at_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self.build(tmp, {"Manufacturer": "Philips"}),
+                             ("1", 1))
+
+    def test_generating_without_a_sidecar_still_works(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self.build(tmp), ("1", 1))
+
+
 class TestCli(unittest.TestCase):
     def test_generate_writes_a_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -152,14 +231,23 @@ class TestCli(unittest.TestCase):
                 ms.main(["--slice-order", "ascending",
                          "--out", os.path.join(tmp, "s.txt")])
 
-    def test_json_and_slice_order_are_mutually_exclusive(self):
+    def test_slice_order_decides_the_path_even_with_a_sidecar(self):
+        # --slice-order selects generating; --json alongside it is consulted for
+        # the multiband factor, not for the excitation order. The sidecar's
+        # SliceTiming here describes a single-band acquisition and is ignored --
+        # the declared order is what gets built.
         with tempfile.TemporaryDirectory() as tmp:
             sidecar = os.path.join(tmp, "dwi.json")
             with open(sidecar, "w") as fh:
-                json.dump({"SliceTiming": [0.0, 0.1]}, fh)
-            with self.assertRaises(ms.SlspecError):
-                ms.main(["--json", sidecar, "--slice-order", "ascending",
-                         "--n-slices", "2", "--out", os.path.join(tmp, "s.txt")])
+                json.dump({"SliceTiming": [0.0, 0.1, 0.2, 0.3],
+                           "MultibandAccelerationFactor": 2}, fh)
+            out, mb = os.path.join(tmp, "s.txt"), os.path.join(tmp, "mb.txt")
+            self.assertEqual(ms.main(["--json", sidecar, "--slice-order", "ascending",
+                                      "--n-slices", "4", "--out", out,
+                                      "--mb-out", mb]), 0)
+            with open(mb) as fh:
+                self.assertEqual(fh.read().strip(), "2")
+            self.assertEqual(len(read_slspec(out)), 2)   # 4 slices, 2 bands
 
     def test_one_source_is_required(self):
         with tempfile.TemporaryDirectory() as tmp:

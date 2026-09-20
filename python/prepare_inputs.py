@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from typing import List, Sequence
 
@@ -128,14 +129,78 @@ def pe_from_csa(field) -> str | None:
     return axis if int(positive) else axis + "-"
 
 
+# What a series name suggests its phase encoding is. Only ever a suggestion:
+# SeriesDescription is free text a radiographer can retype, so nothing here acts
+# on it -- it is quoted back for a human to confirm. The AP -> j- mapping is the
+# convention already documented in pe_from_csa above: dcm2niix reports an axial
+# AP series as j-.
+PE_NAME_HINTS = (("PA", "j"), ("AP", "j-"),
+                 ("LR", "i"), ("RL", "i-"),
+                 ("IS", "k"), ("SI", "k-"))
+
+
+def series_name(meta: dict) -> str:
+    """The protocol's own name for a series, or "" -- for a suggestion only."""
+    for name in ("SeriesDescription", "ProtocolName"):
+        try:
+            value, _ = sidecar.find_scalar(meta, name)
+        except sidecar.SidecarError:
+            continue
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def pe_code_from_name(name: str) -> str:
+    """The direction a series name suggests, or "" when it suggests nothing.
+
+    Whole tokens only, so SHAPE does not match AP and APPA -- which names both
+    directions and so identifies neither -- matches nothing at all.
+    """
+    tokens = {token for token in re.split(r"[^A-Za-z]+", name.upper()) if token}
+    codes = {code for token, code in PE_NAME_HINTS if token in tokens}
+    return codes.pop() if len(codes) == 1 else ""
+
+
+def unsigned_axis_advice(meta_fwd: dict, meta_rev: dict) -> str:
+    """The series names, and the config lines they suggest, as a sentence.
+
+    Empty when the sidecars are not named at all. The suggestion is offered only
+    when both names resolve to different directions on one axis -- anything else
+    is quoted without a recommendation rather than guessed at.
+    """
+    fwd_name, rev_name = series_name(meta_fwd), series_name(meta_rev)
+    if not fwd_name and not rev_name:
+        return ""
+    advice = (" The series are named %r (dwi) and %r (rdwi)."
+              % (fwd_name or "unnamed", rev_name or "unnamed"))
+    fwd_code, rev_code = pe_code_from_name(fwd_name), pe_code_from_name(rev_name)
+    if (fwd_code and rev_code and fwd_code != rev_code
+            and fwd_code.rstrip("-") == rev_code.rstrip("-")):
+        advice += (' If that is right, "pe_dir": "%s" and "rpe_dir": "%s" -- but '
+                   'check it against the protocol, because the name is free text.'
+                   % (fwd_code, rev_code))
+    return advice
+
+
 def resolve_pe_dir(field, pe_override: str) -> tuple[str | None, str]:
     """Return (BIDS phase-encoding code, where it came from)."""
     if pe_override:
         return pe_override, "config.json"
 
-    pe_dir = field("PhaseEncodingDirection", "PhaseEncodingAxis")
+    # Asked separately, not as one call with two names, so the source names the
+    # field that actually answered. PhaseEncodingAxis carries no sign -- a
+    # Philips export may give "j" for both the AP and the PA series -- and
+    # reporting it as PhaseEncodingDirection claims a signed BIDS field was
+    # found in exactly the case where the distinction decides whether pe_dir
+    # and rpe_dir have to be set by hand.
+    pe_dir = field("PhaseEncodingDirection")
     if pe_dir:
         return pe_dir, "PhaseEncodingDirection"
+
+    pe_dir = field("PhaseEncodingAxis")
+    if pe_dir:
+        return pe_dir, "PhaseEncodingAxis"
 
     pe_dir = pe_from_csa(field)
     if pe_dir:
@@ -298,7 +363,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             % (args.nvols, len(bvals), len(bvecs[0]))
         )
 
-    pe_fwd, trt_fwd, src_fwd = series_pe(load_meta(args.json), args.pe_dir,
+    meta_fwd = load_meta(args.json)
+    pe_fwd, trt_fwd, src_fwd = series_pe(meta_fwd, args.pe_dir,
                                          args.readout_time, "dwi")
     series_pe_rows = [pe_fwd + [trt_fwd]]
     series_sources = [src_fwd]
@@ -314,7 +380,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "reverse series: image has %d volumes but bvals/bvecs have %d/%d"
                 % (args.rnvols, len(rbvals), len(rbvecs[0]))
             )
-        pe_rev, trt_rev, src_rev = series_pe(load_meta(args.rjson), args.rpe_dir,
+        meta_rev = load_meta(args.rjson)
+        pe_rev, trt_rev, src_rev = series_pe(meta_rev, args.rpe_dir,
                                              args.rreadout_time, "rdwi", "r")
         series_sources.append(src_rev)
         if src_rev["trt_source"] != src_fwd["trt_source"]:
@@ -325,7 +392,34 @@ def main(argv: Sequence[str] | None = None) -> int:
                  "(%s vs %s); set 'readout_time'/'rreadout_time' explicitly if "
                  "topup looks wrong"
                  % (src_fwd["trt_source"], src_rev["trt_source"]))
+        # The fault here is a sign that was never recorded, and it does not
+        # need the two vectors to collide to be wrong: a pair can look opposed
+        # on paper because one side's sign was assumed positive.  Only the
+        # field that answered tells the two apart, which is why resolve_pe_dir
+        # reports it.
+        unsigned = [label for label, source in (("dwi", src_fwd), ("rdwi", src_rev))
+                    if source["pe_source"] == "PhaseEncodingAxis"]
+        if unsigned:
+            collided = ("; here both series resolved to the same vector %s, "
+                        "so there is no opposing pair at all"
+                        % (pe_fwd,)) if pe_rev == pe_fwd else ""
+            raise PrepError(
+                "the phase-encoding direction for %s comes from an unsigned "
+                "PhaseEncodingAxis, which states the axis but not the direction "
+                "along it, so the sign was assumed rather than read. topup needs "
+                "the two series to be genuinely opposite, and an assumed sign "
+                "cannot establish that%s. Set 'pe_dir' and 'rpe_dir' in "
+                "config.json.%s Which of the two gets the minus sign matters "
+                "less than it looks: naming the pair backwards flips both "
+                "series, topup's field flips with them and the correction is "
+                "unchanged. What must be right is that the two are opposite."
+                % (" and ".join(unsigned), collided,
+                   unsigned_axis_advice(meta_fwd, meta_rev))
+            )
         if pe_rev == pe_fwd:
+            # Two series that really were acquired the same way round: a data
+            # error rather than a sidecar one, and no message talks anyone out
+            # of it.
             raise PrepError(
                 "both series report the same phase-encoding vector %s; topup "
                 "needs opposing directions. Check the sidecars, or set "

@@ -79,12 +79,23 @@ if is_true "$UPDATE_REPORTS"; then
     # is whether this installation can load it.
     FSL_PYTHON="${FSLDIR:-/opt/fsl}/bin/python"
     UPDATE_IMPORT_ERROR=""
-    # The probe is *expected* to fail, so it cannot be left to propagate: this
-    # script runs under `set -e` with pipefail, where a failing command
-    # substitution ends the run.
-    if [ -x "$FSL_PYTHON" ]; then
-        UPDATE_IMPORT_ERROR="$({ "$FSL_PYTHON" -c \
-            'from eddy_qc.SQUAD import squad_update' 2>&1 >/dev/null || true; } | tail -1)"
+    # Judge the probe by its exit status, never by whether it printed anything.
+    # A successful import is entitled to write to stderr on the way, and one of
+    # them does: numexpr, pulled in by pandas, announces "nthreads cannot be
+    # larger than environment variable NUMEXPR_MAX_THREADS (64)" on any host
+    # with more cores than that, and carries on. Reading stderr as failure
+    # skipped --update on every large machine and blamed a dependency that was
+    # sitting right there.
+    #
+    # `if !` keeps a failing probe from ending the run under `set -e`, which is
+    # what the old `|| true` was for.
+    PROBE_LOG="$SQUAD_WORK/squad_update_probe.log"
+    if [ -x "$FSL_PYTHON" ] && \
+       ! "$FSL_PYTHON" -c 'from eddy_qc.SQUAD import squad_update' \
+            >/dev/null 2>"$PROBE_LOG"; then
+        UPDATE_IMPORT_ERROR="$(tail -1 "$PROBE_LOG")"
+        [ -n "$UPDATE_IMPORT_ERROR" ] || \
+            UPDATE_IMPORT_ERROR="the import failed without a message"
     fi
     if [ -n "$MISSING" ]; then
         warn "not updating the single-subject reports: no qc.pdf for $MISSING. Re-run those subjects with eddy_qc enabled, or unset update_single_subject_reports."
