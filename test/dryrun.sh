@@ -411,6 +411,31 @@ check "it stops before eddy ran" bash -c '
 # The Philips case: the sidecar carries no timings, so the excitation order is
 # declared from the protocol instead.  make_test_data.py writes a step-2
 # interleave, so "interleaved" is the truthful declaration for this data.
+printf '\n--- an unsigned PhaseEncodingAxis stops the run and says why ---\n'
+SCEN="$ROOT/15d-unsigned-pe-axis"
+mkdir -p "$SCEN"
+python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
+for j in "$SCEN"/input/*/dwi.json; do
+    # A Philips export: the axis is stated, the direction along it is not, so
+    # both series resolve to plain "j" and topup has no opposing pair.
+    jq 'del(.PhaseEncodingDirection) + {PhaseEncodingAxis: "j"}' "$j" \
+        > "$j.tmp" && mv "$j.tmp" "$j"
+done
+jq '.SeriesDescription = "Brain_dMRI_PA"' "$SCEN/input/dwi/dwi.json" > "$SCEN/t" \
+    && mv "$SCEN/t" "$SCEN/input/dwi/dwi.json"
+jq '.SeriesDescription = "Brain_dMRI_AP"' "$SCEN/input/rdwi/dwi.json" > "$SCEN/t" \
+    && mv "$SCEN/t" "$SCEN/input/rdwi/dwi.json"
+base_config "$SCEN/input" '{}' > "$SCEN/config.json"
+( cd "$SCEN" && PATH="$ROOT/bin:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
+    > "$SCEN/log.txt" 2>&1
+check "the run stops rather than guessing a direction" test $? -ne 0
+check "the message names the unsigned axis" \
+    grep -q "unsigned PhaseEncodingAxis" "$SCEN/log.txt"
+check "and says which keys to set" grep -q "pe_dir. and .rpe_dir" "$SCEN/log.txt"
+check "it quotes the series names" grep -q "Brain_dMRI_PA" "$SCEN/log.txt"
+check "and suggests the pair they imply" grep -q 'rpe_dir.*j-' "$SCEN/log.txt"
+check "while saying the name is only a hint" grep -q "free text" "$SCEN/log.txt"
+
 printf '\n--- a declared slice order, with no SliceTiming to derive from ---\n'
 SCEN="$ROOT/16-declared-order"
 mkdir -p "$SCEN"

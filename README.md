@@ -304,7 +304,16 @@ splitting in the first place. So is using **one kind of sidecar** for the whole
 study: phase encoding derived from the Siemens CSA fields carries the opposite
 sign convention to a BIDS `PhaseEncodingDirection`, which flips both series
 together and leaves the correction unchanged — but changes the acqparams, which
-`eddy_squad` compares exactly. Stage 0 warns when it takes the CSA path. That one
+`eddy_squad` compares exactly. Stage 0 warns when it takes the CSA path.
+
+The same applies to `pe_dir`/`rpe_dir` set by hand. Some sidecars — Philips
+exports in particular — carry only an unsigned `PhaseEncodingAxis`, which states
+the axis but not the direction along it, so both series resolve identically and
+stage 0 stops rather than guess. It names the cause, quotes both
+`SeriesDescription`s and suggests the pair they imply, but never acts on a name:
+free text is not evidence. Whichever way round you set them, **set it the same
+way for every subject in the study**, or the two conventions produce different
+`data_eddy_para` and split in SQUAD. That one
 is not something `pool_across_acquisition` will paper over: the phase-encode
 vectors differ, so it refuses. Reprocess the odd subjects instead.
 

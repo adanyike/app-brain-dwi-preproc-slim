@@ -41,6 +41,19 @@ study-wise eddy QC (SQUAD) across a whole cohort.
   names the field it came from, an explicit `multiband` still wins, and anything
   unreadable falls back to 1 rather than guessing, since a wrong factor builds a
   slspec for an acquisition this is not.
+- An unsigned `PhaseEncodingAxis` stops stage 0 with the cause rather than the
+  symptom. Some sidecars state the axis without the direction along it, so the
+  AP and PA series resolve identically, the vectors collide and the run used to
+  report only that they matched. It now says the sidecar gives an unsigned axis
+  and which keys to set, quotes both `SeriesDescription`s and suggests the pair
+  they imply -- clearly as a suggestion, since a series name is free text a
+  radiographer can retype and nothing here acts on it. It also says why the
+  choice is less fraught than it looks: naming the pair backwards flips both
+  series, topup's field flips with them and the correction is unchanged, so what
+  must be right is that the two are opposite. Two series that genuinely share a
+  direction still get the original message -- that is a data error, not a
+  sidecar one, and the two are only distinguishable because the App now records
+  which field answered.
 - `prep.json` names the field the phase-encoding direction actually came from.
   It previously reported `PhaseEncodingDirection` even when the value was really
   the unsigned `PhaseEncodingAxis` -- which is what a Philips export carries, and
