@@ -8,3 +8,7 @@ test/input/
 __pycache__/
 .singularity/
 *.sif
+
+# Developer documentation -- distributed as a download, never committed here.
+# The README is the only documentation this public repository carries.
+dev-squad-readme.md

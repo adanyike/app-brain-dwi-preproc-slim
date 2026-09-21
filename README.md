@@ -12,18 +12,10 @@ corrects eddy currents and subject motion — including **within-volume
 and reports mean FA, MD, AD and RD in the 50 white-matter regions of the JHU
 ICBM-DTI-81 atlas, in each subject's own diffusion space.
 
-**This is the slim-container variant of `app-brain-dwi-preproc`.** The analysis
-is not a variant of anything: `src/`, `python/`, `templates/` and the shared
-tests are byte-identical to the full app, and `test/test_parity.sh` fails when
-they drift, so the two produce the same numbers. What differs is the
-container. The full app ships its toolchain whole; this one installs FSL,
-MRtrix3 and ANTs in a builder stage, then prunes FSL to the subsystems the
-pipeline executes and resolves the ANTs and MRtrix3 programs it calls together
-with their libraries, so the runtime image copies only those trees and the
-removed bytes never exist in a lower layer. Nothing the pipeline runs is
-missing: `docker/selftest.sh` executes every tool as the final build step and
-fails the build on a missing executable or a dynamic-linker error. See
-[The container](#the-container) for what is pruned and how it is checked.
+Everything runs in one task, and every result carries its provenance: the
+subject and session labels, the shell that was fitted, the acquisition
+parameters and where each was read from, whether slice-to-volume correction
+actually ran, and the quality-control verdict on both brain masks.
 
 ## What it does
 
@@ -34,95 +26,60 @@ fails the build on a missing executable or a dynamic-linker error. See
 | 2 | Eddy-current, motion and slice-to-volume correction with outlier replacement, applying the field | FSL `eddy_cuda` |
 | 3 | B1 bias-field correction; detect the b-value shells and fit the tensor to one; derive RD, AD, colour FA and Westin shape measures | MRtrix3, ANTs, FSL `dtifit` |
 | 4 | Register the JHU FA template to each subject's FA and warp the atlas labels into native space | ANTs |
-| 5 | Mean, SD, median, min, max and voxel count of each metric in each of the 50 ROIs | — |
-| 6 | Publish the datasets, the QC bundle and `product.json` | — |
+| 5 | Summarise each metric in each of the 50 ROIs | — |
+| 6 | Publish the datasets, the quality-control bundle and `product.json` | — |
 
-All seven stages run as a single task; `run.sh` can also run a subset, which is
-what recovering from a failed stage needs — see [Running it](#running-it).
-Quality-control output from `eddy_quad` and a summary with per-volume motion and
-per-ROI FA are produced alongside the results.
+Three things are measured from your data rather than assumed, so nothing has to
+be prepared by hand:
 
-Three details worth knowing, because they are derived rather than assumed:
-
-* **The acquisition parameters are read from the sidecars.** Phase-encoding
-  direction and total readout time are taken from `PhaseEncodingDirection` and
-  `TotalReadoutTime`, falling back through `EffectiveEchoSpacing`,
-  Siemens `BandwidthPerPixelPhaseEncode`, and the estimated variants. Nothing
-  has to be prepared by hand, and the source used is recorded in the output.
-* **The slice specification is derived from `SliceTiming`** (or Siemens
+* **The acquisition parameters come from the sidecars.** Phase-encoding
+  direction and total readout time are read from `PhaseEncodingDirection` and
+  `TotalReadoutTime`, falling back through `EffectiveEchoSpacing`, the Siemens
+  bandwidth field and the estimated variants. The source used for each is
+  recorded in the output.
+* **The slice specification comes from `SliceTiming`** (or Siemens
   `MosaicRefAcqTimes`). Slices are grouped by acquisition time, so the multiband
-  factor is measured rather than assumed; a non-uniform grouping is reported as
-  an error instead of producing a silently wrong file.
-* **The topup configuration is chosen from the matrix size.** topup requires the
-  image size to be a multiple of each sub-sampling level in its config, so the
-  app reads the dimensions and picks the fastest one they allow: `b02b0_4.cnf`
-  when every dimension divides by 4, `b02b0_2.cnf` when they divide by 2, and
-  `b02b0_1.cnf` otherwise. Sub-sampling only affects speed — FSL states the
-  results are very close to identical — and the resolved config is recorded in
-  `product.json`.
+  factor is measured rather than assumed, and a grouping that does not make
+  sense is reported as an error instead of producing a silently wrong file.
+* **The topup configuration comes from the matrix size.** topup needs the image
+  size to be a multiple of each sub-sampling level in its config, so the app
+  reads the dimensions and picks the fastest one they allow. Sub-sampling only
+  affects speed, and the config used is recorded in `product.json`.
 
-* **The brain mask is checked against the image, not trusted.** `bet` sometimes
-  returns a mask with a bite out of it or one that stops short of the temporal
-  lobes, and nothing downstream notices: the run completes and every output is
-  shaped exactly like a good one's. Both masks are measured against the image
-  they were extracted from, a mask that is missing brain is repaired
-  additively and within a cap, and the verdict, the numbers and a PNG overlay
-  are published either way. See
-  [Brain mask coverage](#brain-mask-coverage) below.
-
-Because of that last point, every acquired slice is kept whatever the slice
-count. There is no reason to crop or duplicate a slice to make the count even:
-[FSL withdrew that advice](https://fsl.fmrib.ox.ac.uk/fsl/docs/diffusion/topup/users_guide/index.html)
-because a cropped volume no longer carries the multiband structure `eddy` needs
-for slice-to-volume correction, and an odd dimension simply selects
-`b02b0_1.cnf` instead.
+Every acquired slice is kept, whatever the slice count. Cropping a volume to
+make the count even — advice
+[FSL has since withdrawn](https://fsl.fmrib.ox.ac.uk/fsl/docs/diffusion/topup/users_guide/index.html)
+— destroys the multiband structure `eddy` needs for slice-to-volume correction,
+and an odd dimension simply selects a topup config that does not sub-sample.
 
 ## Inputs
 
-| Input | Datatype | Required | `config.json` keys |
-|---|---|---|---|
-| Diffusion series with its gradient table and JSON sidecar | `neuro/dwi` | yes | `dwi`, `bvals`, `bvecs`, `dwi_json` |
-| Reverse phase-encoded series | `neuro/dwi` | yes | `rdwi`, `rbvals`, `rbvecs`, `rdwi_json` |
-| Slice specification | — | no | `slspec` |
+| Input | Datatype | Required |
+|---|---|---|
+| Diffusion series with its gradient table and JSON sidecar | `neuro/dwi` | yes |
+| Reverse phase-encoded series | `neuro/dwi` | yes |
+| Slice specification (`slspec`) | — | no |
 
-brainlife fills those keys in from the datasets a task is given; running locally
-means naming the files yourself, which is what `config.json.example` is for.
+**The reverse phase-encoded series is required.** It is what makes the
+distortion correction possible, and there is no option to proceed without it: an
+uncorrected run is geometrically wrong while being named, shaped and summarised
+exactly like a corrected one, so nothing downstream could tell the two apart if
+they were pooled. Data with no opposing pair needs a different app.
 
-The two JSON sidecars are optional only in that nothing checks for them up
-front. Everything derived is derived from them, so without one, stage 0 stops
-and names what it could not resolve — unless `pe_dir` / `rpe_dir` and
-`readout_time` / `rreadout_time` state the acquisition instead, or `acqp` and
-`index` replace the derived files outright.
+Slice-to-volume correction needs the slice acquisition order, which the app
+takes from the first of these that is available:
 
-The reverse series is what makes the distortion correction possible, so the app
-will not run without it. There is no option to proceed anyway: an uncorrected
-run is geometrically wrong while being named, shaped and summarised exactly like
-a corrected one, so nothing downstream could tell the two apart if they were
-pooled. Data with no opposing pair needs a different app.
-
-Slice-to-volume correction needs to know the slice acquisition order, which the
-app resolves from the first of these that is available:
-
-1. **An `slspec` input file.** One row per excitation, listing the 0-based
-   slices acquired together. A file for an 84-slice, multiband-4 protocol ships
-   in `templates/` as a worked example of the format — it is not a drop-in for
-   other protocols, and a slspec that does not describe the acquisition (wrong
-   slice count, out-of-range or repeated indices, ragged rows) is refused rather
-   than passed to `eddy`.
-2. **A declared `slice_order`**, plus `slice_packages` and `slice_step` as the
-   protocol requires. This is for sidecars that carry no timings at all — some
-   Philips exports, or a converter that dropped the field. `multiband` is read
-   from the sidecar when it states it — `MultibandAccelerationFactor` on
-   Siemens, `ParallelReductionFactorOutOfPlane` on Philips MB-SENSE — and the
-   log names which field it came from; set it in `config.json` to override, or
-   when neither field is present.
-   It asserts the acquisition rather than measuring it, so it is opt-in; where
-   the sidecar does carry `SliceTiming`, the declaration is checked against it
-   and a disagreement stops the run. Note that Philips's own `default` scan
-   order interleaves with a step of roughly √(slices per package) rather than
-   the step of 2 that `interleaved` means, so check `philips_default` against
-   your protocol printout or give `slice_step` explicitly.
-3. **`SliceTiming` in the sidecar**, the usual case, needing no configuration.
+1. **An `slspec` input file** — one row per excitation, listing the 0-based
+   slices acquired together. A worked example for an 84-slice, multiband-4
+   protocol ships in `templates/`; it is not a drop-in for other protocols, and
+   a file that does not describe your acquisition is refused rather than passed
+   to `eddy`.
+2. **A declared `slice_order`**, for sidecars that carry no timings at all —
+   some Philips exports, or a converter that dropped the field. This asserts the
+   acquisition rather than measuring it, so it is opt-in; where the sidecar does
+   carry `SliceTiming`, the declaration is checked against it and a disagreement
+   stops the run.
+3. **`SliceTiming` in the sidecar** — the usual case, needing no configuration.
 
 Given none of the three the app still completes, but corrects motion
 volume-to-volume only and records that in the summary.
@@ -136,424 +93,274 @@ volume-to-volume only and records that in the summary.
 | `tensor` | `neuro/tensor` | Tensor, FA, MD, AD, RD, CL, CP, CS, colour FA, V1, S0 |
 | `roistats` | `raw` | Per-ROI statistics, tidy and wide CSV, plus JSON |
 | `reg` | `raw` | Atlas in native space and the ANTs transforms |
-| `qc` | `raw` | `eddy_quad` report, motion and outlier files, derived acquisition parameters, brain-mask coverage reports and overlays, and the mask `eddy` used with the image it was judged against |
-| `eddyqc` | `raw` | `qc.json`, `qc.pdf` and the cohort signature — the lean dataset the group QC App consumes |
+| `qc` | `raw` | `eddy_quad` report, motion and outlier files, the derived acquisition parameters, and the brain-mask coverage reports and overlays |
+| `eddyqc` | `raw` | The lean QC dataset the group QC App consumes |
 
 `roistats/roi_stats.csv` has one row per metric and ROI, carrying `subject`,
-`session` and `run_id` so results from many subjects can be concatenated
-directly. `roistats/<METRIC>_mean.csv` is the same data one row per subject,
-one column per ROI.
+`session` and `run_id`, so results from many subjects concatenate directly.
+`roistats/<METRIC>_mean.csv` is the same data one row per subject, one column
+per ROI. Each row reports the mean, SD, median, min, max and voxel count.
 
-## Brain mask coverage
+## Quality control
 
-The mask matters more than it looks. The stage-1 mask is what `eddy --mask` is
-given, and `eddy` estimates its Gaussian-process predictions and its outlier
-detection inside it, so a mask with a bite out of it degrades the corrected data
-*everywhere*, not only near the defect — and because the same mask bounds
-`eddy_quad`'s voxel-wise metrics, a bad mask partly hides itself from its own QC
-report. The stage-3 mask is published as `neuro/mask` and bounds `dtifit` and
-every ROI average.
+`eddy_quad` runs by default and its report is published under
+`qc/eddy_quad/`, alongside the per-volume motion and outlier files and a summary
+on the task page showing per-volume motion and per-ROI FA.
 
-So both are measured against the image they came from, and the verdict is one of
-three:
+### Brain mask coverage
+
+Both brain masks are measured against the image they were extracted from,
+because `bet` sometimes returns a mask with a bite out of it or one that stops
+short of the temporal lobes — and nothing downstream notices. The run completes
+and every output is shaped exactly like a good one's.
+
+It matters most at stage 1. That mask is what `eddy --mask` is given, and `eddy`
+estimates its predictions and its outlier detection inside it, so a mask missing
+a chunk degrades the corrected data *everywhere*, not only near the defect.
+Because the same mask bounds `eddy_quad`'s metrics, a bad mask partly hides
+itself from its own QC report. The stage-3 mask is published as `neuro/mask` and
+bounds `dtifit` and every ROI average.
+
+Each mask gets one of three verdicts:
 
 | Verdict | Meaning | What happens |
 |---|---|---|
-| `ok` | nothing brain-bright is left outside the mask beyond `mask_warn_fraction` of its volume, and the mask tapers rather than ending abruptly | nothing |
+| `ok` | nothing brain-bright is left outside the mask, and it tapers rather than ending abruptly | nothing |
 | `suspicious` | brain is missing: a chunk, or a mask that stops mid-brain | repaired, unless `mask_repair` says otherwise |
-| `implausible` | not a brain at all — a few percent of the field of view, a volume outside the range a brain can be, or a centre far from the centre of the signal (`bet` landing on the neck) | **never** repaired: growing it would hide the only symptom |
+| `implausible` | not a brain at all — far too small or large, or centred away from the signal (`bet` landing on the neck) | **never** repaired: growing it would hide the only symptom |
 
-Two detectors have to agree that something is missing, and they are chosen
-because each sees what the other cannot. One reflects the mask about its own
-centroid along the left-right axis: where the other hemisphere has brain and this
-side does not, something was removed. The other looks inside the union of the
-three directional span fills and within a couple of voxels of the mask. A third
-measurement, the per-slice area profile, catches the one defect neither sees — a
-mask that ends at half its widest slice instead of tapering. Missing voxels are
-then split in two, because they call for opposite responses: where there is
-signal the mask is at fault and can be repaired, and where the image is dark too
-the **data** is at fault — a dropout — which is reported and never masked over,
-since `eddy`'s outlier replacement, not a bigger mask, is what addresses it.
+Where brain appears to be missing, the app distinguishes two causes, because
+they need opposite responses. Where there is signal outside the mask, the mask
+is at fault and can be repaired. Where the image is dark too, the **data** is at
+fault — a dropout — which is reported and never masked over, since `eddy`'s
+outlier replacement is what addresses it.
 
-Two numbers decide it, and both are measured rather than assumed. A defect that
-is spread out has to exceed `mask_warn_fraction` of the mask volume; a defect
-that is concentrated is caught by the localisation blocks instead, since a bite
-worth repairing can be far too small to move a whole-mask fraction. On real
-1.5 mm data a healthy `bet` mask leaves 0.04–0.18% of its volume as brain-bright
-signal just outside it, and its worst block is 8–16% missing — the ragged edge
-at the temporal poles and orbitofrontal cortex that every mask has. The defaults
-sit several times above both, so a normal subject reads `ok` and a real bite does
-not.
+The repair is deliberately dull: a union with a second, more permissive `bet`,
+confined to the neighbourhood of the defect so the rest of the mask stays as
+`bet` made it, plus enclosed holes, only where there is signal, and never
+removing a voxel. If it would add more than its cap it is discarded whole and
+the mask is reported instead. A repaired stage-1 mask changes `eddy`'s output,
+so it is never quiet about it: the log warns, the task page says so, and
+`product.json` records the before and after voxel counts.
 
-The repair is deliberately dull: union with a second `bet` at a lower threshold,
-confined to the neighbourhood of the defect so the rest of the mask stays exactly
-as `bet` made it, plus enclosed holes, only where there is signal, never into a
-dropout, and never removing a voxel. If it would add more than the cap it is
-discarded whole and the mask is reported instead — a repair that large is not a
-repair. The cap differs by stage on purpose: losing brain is the expensive error
-for `eddy`, while an over-inclusive published mask contaminates every ROI mean,
-so stage 3's cap is the tighter one.
+Published in `qc/`: `mask_qc_eddy.json` and `mask_qc_final.json` with the full
+measurements, `mask_overlay_eddy.png` and `mask_overlay_final.png` showing the
+mask outline with anything found missing in yellow and anything the repair added
+in green, and `eddy_mask.nii.gz` with `eddy_meanb0.nii.gz` — the mask `eddy`
+used and the image it was judged against, so "was the mask the problem?" can be
+answered after the fact.
 
-A repaired stage-1 mask changes `eddy`'s output, so it is never quiet about it:
-the log warns, the task page says so in those terms, and `product.json` records
-the before and after voxel counts.
-
-Published in `qc/`: `mask_qc_eddy.json` and `mask_qc_final.json` (the full
-measurements), `mask_overlay_eddy.png` and `mask_overlay_final.png` (slices with
-the mask outline, what was found missing in yellow and anything the repair added
-in green), and `eddy_mask.nii.gz` with `eddy_meanb0.nii.gz` — the mask `eddy`
-actually used and the image it was judged against, neither of which the App
-published before. Without the pair, "was the mask the problem?" cannot be
-answered after the fact: `meanb0.nii.gz` is the *stage-3* mean b=0, not the one
-stage 1 masked.
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `mask_check` | `true` | Measure both masks against the image |
-| `mask_repair` | `auto` | `auto` repairs only a mask the check flags; `always` repairs every subject's, so a study is processed identically; `never` reports and changes nothing |
-| `mask_repair_f` | `auto` | The `bet` threshold for the permissive estimate. `auto` is the stage's own `f` (`bet_topup_f` or `bet_final_f`) minus 0.2, floored at 0.02 |
-| `mask_warn_fraction` | `0.01` | How much brain-bright signal outside the mask, as a fraction of its volume, counts as missing brain |
-| `mask_min_defect_block` | `0.35` | How much of one 8×8×4 localisation block must be missing before a *concentrated* defect is called one. Below this it is the ragged edge every `bet` mask has |
-| `mask_repair_cap` / `mask_repair_cap_final` | `0.25` / `0.1` | Discard the repair if it would add more than this fraction of the mask |
-| `mask_repair_grow` | `0` | Extra intensity-growth iterations on the stage-1 mask. Off by default; bounded above by the in-mask 99.5th percentile so it cannot walk into the skull |
-| `mask_figure` | `true` | Write the overlay PNGs |
-
-A note for group analysis: mask repair is a per-subject difference that
-`eddy_squad` cannot see — it compares eddy's parameters, not masks — so it never
-splits a cohort. A study that wants strict comparability should set `mask_repair`
-to `always` or `never` explicitly rather than leaving subjects to differ.
+For a study that needs every subject treated identically, set `mask_repair` to
+`always` or `never` rather than leaving subjects to differ.
 
 ## Group quality control (eddy SQUAD)
 
-`eddy_quad` assesses one subject; FSL's `eddy_squad` assesses a study, flagging
-the subjects that sit in the tail of the group's motion, outlier and CNR
-distributions. It is a separate brainlife App — it takes N subjects where the
-pipeline takes one — registered against this same repository and container:
-`main` routes a task to `run_squad.sh` when its config carries a group input
-(`eddyqc`, or the aliases `qc_folders`, `quad_folders`, `qc_json`) or sets
-`"mode": "group"` (`"squad"` is accepted too), and to `run.sh` otherwise;
-`"mode": "subject"` (or `"preproc"`) forces the pipeline, and any other value is
-an error rather than a guess.
+`eddy_quad` assesses one subject. FSL's `eddy_squad` assesses a **study**,
+flagging the subjects that sit in the tail of the group's motion, outlier and
+CNR distributions. It is a separate brainlife App — it takes N subjects where
+this one takes one — backed by the same repository and container.
 
-Run it over the `eddyqc` datasets the pipeline published, with the App's input
-set to accept multiple datasets. brainlife then writes them into `config.json`
-as an array and describes them in `_inputs`, in the same order:
-
-```json
-{ "eddyqc": ["../5f0e.../eddyqc", "../5f0f.../eddyqc"] }
-```
+Run it over the `eddyqc` datasets this app published, with the App's input set
+to accept multiple datasets. No GPU is needed: it reads the QC databases, not
+the images.
 
 | Output | Contents |
 |---|---|
 | `squad/group_qc.pdf` | the study-wise report |
 | `squad/group_db.json` | the study-wise database |
 | `squad/cohorts.json` | which subjects pooled, which did not, and why |
-| `squad/subject_list.txt`, `squad/grouping_variable.txt` | exactly what `eddy_squad` was given |
-| `squad/updated/<subject>_qc_updated.pdf` | single-subject reports with the group's context, unless `update_single_subject_reports` is turned off |
+| `squad/updated/<subject>_qc_updated.pdf` | each subject's own report with the group's context |
+
+**Start with `cohorts.json`.** It is the file that explains a group run.
 
 Updating the single-subject reports happens by default, because a subject's own
-report flagged against its group is half the point of running SQUAD. It needs one
-thing the group report itself does not: each pooled subject's own `qc.pdf`, which
-`eddy_squad` opens to append the study-wise pages to. When a subject has not
-published one, the update alone is skipped and that subject is named, rather than
-losing the group report — which is what `eddy_squad` would do on its own.
+report flagged against its group is half the point of running SQUAD. It needs
+each pooled subject's own `qc.pdf`, which the `eddyqc` dataset carries; when a
+subject has not published one, that subject is named and only the update is
+skipped, rather than losing the group report.
 
-If the image's FSL cannot perform the update at all, the App publishes the group
-report regardless and the log says why. Set `update_single_subject_reports` to
-false to skip the attempt.
+Subjects processed before this App existed need no reprocessing. `eddy_quad` has
+always published the database `eddy_squad` reads, so an older task's
+`output/qc/eddy_quad/` is a valid input and old and new subjects pool together.
 
-### Cohorts, and why a group run can refuse
+### Why a group run can leave subjects out
 
-`eddy_squad` pools subjects only when `eddy` was run with the same features for
-all of them — it compares six flags in each `qc.json` and raises
-`Eddy output inconsistency detected!` otherwise. On brainlife every subject is
+`eddy_squad` pools subjects only when `eddy` ran with the same features for all
+of them, and when they agree on the acquisition. On brainlife every subject is
 an independently launched task, so that is easy to trip:
 
-* **no GPU on the node** → no slice-to-volume metrics (`qc_s2v_params_flag`);
-* **no reverse phase-encoded series** → no susceptibility field
-  (`qc_field_flag`). This pipeline refuses to run without one, so that can only
-  reach a group run through a subject processed elsewhere — see
-  [Subjects processed before this App existed](#subjects-processed-before-this-app-existed);
-* **`eddy_repol`, `eddy_cnr_maps`, `eddy_residuals` changed between submissions**
-  → no outlier, CNR or residual metrics.
+* **no GPU on the node** → no slice-to-volume metrics for that subject;
+* **different acquisition** → a different number of shells, b=0 volumes,
+  diffusion-weighted volumes or phase-encode directions, or different readout
+  times;
+* **settings changed between submissions** → different outlier, CNR or residual
+  metrics.
 
-Newer FSL releases compare the eddy **input** data as well, and refuse the study
-with `Inconsistency detected in eddy input data in <field>!` when subjects
-disagree on the acquisition. Not every field, and not all of them the same way —
-`eddy_qc/SQUAD/squad_db.py` compares each subject against the first in the list.
-As of **FSL 6.0.7.23**, where this was read from the source and confirmed against
-a real two-site run:
+Rather than failing on subject 37, the App groups its inputs by what they have
+in common, reports on the largest group, and names the subjects it left out and
+the field that differs, with both values. Run it again with `cohort` set to
+another group to report on that one too, or set `require_homogeneous` to refuse
+the split instead of choosing.
 
-| Field | How SQUAD compares it |
-|---|---|
-| `data_no_shells`, `data_no_PE_dirs`, `data_no_b0_vols`, `data_no_dw_vols`, `data_eddy_para` | **exactly** (`!=`) |
-| `data_unique_bvals` | same number of shells, then `np.allclose` with `atol=20` |
-| `data_vox_size` | `np.allclose` with `rtol=1e-2` |
-| `data_protocol`, `data_unique_pes` | **not compared at all** |
+Two settings keep a study together in the first place: `require_gpu: true`
+across the project, and **one kind of sidecar** for the whole study, since
+phase-encoding read from Siemens DICOM fields carries the opposite sign
+convention to a BIDS `PhaseEncodingDirection`. That flips both series together
+and leaves the correction unchanged, but changes the parameters `eddy_squad`
+compares. Stage 0 warns when it takes that path. The same applies to `pe_dir` /
+`rpe_dir` set by hand: whichever way round you set them, set them the same way
+for every subject.
 
-So each subject publishes a **cohort signature** (`eddyqc/squad_ready.json`, also
-shown on the task page): those six flags plus the five acquisition fields SQUAD
-compares exactly, taken as QUAD wrote them. The b-values and voxel size are
-checked afterwards, against the cohort's first subject, with SQUAD's own
-tolerances — so a b-value of 1495 pools with one of 1500, because SQUAD pools
-them, and 1530 does not. The protocol and the phase-encode directions are
-reported when they differ and never split anything, because SQUAD does not look
-at them.
+### Pooling two sites that ran the same protocol
 
-The signature mirrors that comparison rather than exceeding it, in both
-directions. A key looser than SQUAD's fails the whole study where SQUAD refuses;
-a key stricter than SQUAD's splits a study SQUAD would have pooled, costs the
-same, and announces itself as nothing at all.
+Two sites running the same protocol can state the readout time slightly
+differently — 0.0959097 against 0.0965997 — because a sidecar can describe the
+same echo train in two ways. `eddy_squad` compares that field exactly, so it
+would call them two studies and the cross-site report could not be made.
 
-The group App buckets its inputs by signature, applies the tolerances within each
-bucket, reports on the largest cohort, and names the subjects it left out and the
-field that differs, with both values — rather than failing on subject 37. Run it
-again with `cohort` set to another signature to report on that one too, or set
-`require_homogeneous` to refuse the split instead of choosing.
+`pool_across_acquisition` (**on by default**) merges groups that differ *only*
+in that field, in the App's own working copies of the QC databases. Your inputs
+are never touched. It is bounded: the phase-encode directions must be identical
+and the readout times must agree within `pool_readout_tolerance`, 1.75% by
+default, which covers the difference between the two ways of stating one readout
+and stays well below the gap between genuinely different scanners. Anything
+wider is refused and the groups stay split, with the reason on the task page.
 
-These rules are a property of the FSL you run, not of the format: an older release
-compared none of this and pooled anything, which is why a study that ran years ago
-can start splitting on a difference that was always there. Check your own copy
-before trusting the table above — the whole comparison is a dozen lines:
-
-```bash
-FSL_PY="${FSLDIR:-/opt/fsl}/bin/python"
-grep -n 'allclose\|Inconsistency detected in eddy input data' \
-    "$("$FSL_PY" -c 'import eddy_qc.SQUAD.squad_db as m; print(m.__file__)')"
-```
-
-If your FSL compares something differently, `signature_fields` (a list of
-`data_*` field names) is the adjustment in both directions: drop a field
-to stop splitting on it, or name `data_unique_bvals` / `data_vox_size` there to
-compare it exactly instead of within the tolerance. And if a group run is refused
-anyway — a future release comparing something this app does not — the failure is
-followed by a comparison of every eddy input field across the staged subjects,
-naming the field and which subjects hold which value.
-
-Setting `require_gpu: true` across a project is the way to stop the cohort
-splitting in the first place. So is using **one kind of sidecar** for the whole
-study: phase encoding derived from the Siemens CSA fields carries the opposite
-sign convention to a BIDS `PhaseEncodingDirection`, which flips both series
-together and leaves the correction unchanged — but changes the acqparams, which
-`eddy_squad` compares exactly. Stage 0 warns when it takes the CSA path.
-
-The same applies to `pe_dir`/`rpe_dir` set by hand. Some sidecars — Philips
-exports in particular — carry only an unsigned `PhaseEncodingAxis`, which states
-the axis but not the direction along it. Stage 0 stops whenever **either** series
-in a reverse-PE pair took its direction from that field, and does not wait for
-the two to collide: one signed sidecar beside one unsigned one produces vectors
-that differ, but only because the unsigned side's sign was assumed positive
-rather than read. If that series really ran the same way round, topup estimates
-its field from two identically distorted volumes and the output is wrong while
-looking finished. The stop names the cause and the series it came from, quotes
-both `SeriesDescription`s and suggests the pair they imply, but never acts on a
-name: free text is not evidence. Setting `pe_dir`/`rpe_dir` clears it, because
-the sign is then stated rather than assumed. Whichever way round you set them,
-**set it the same way for every subject in the study**, or the two conventions
-produce different `data_eddy_para` and split in SQUAD. That one is not something
-`pool_across_acquisition` will paper over: the phase-encode vectors differ, so it
-refuses. Reprocess the odd subjects instead.
-
-#### Pooling across the acquisition parameters
-
-`data_eddy_para` is the one SQUAD compares exactly and no rearrangement of the
-signature can soften. Two sites running the same protocol whose readout times
-differ in the sixth decimal — 0.0959097 against 0.0965997 — are two cohorts, and
-the cross-site group report SQUAD exists to produce cannot be made.
-
-`pool_across_acquisition` (**on by default**) merges cohorts that differ **only**
-in that field, by rewriting it in the App's own staged copies of the QC
-databases to the reporting cohort's value. The inputs are never touched. It is
-bounded: the phase-encode vectors must be identical as a set, and the readout
-times must agree within `pool_readout_tolerance` — **1.75%** of the reference
-site's readout, by default. Different phase-encode vectors, a different number of
-series, or a wider readout gap are refused and the cohorts stay split, with the
-reason on the task page — that is a different acquisition, not the same one
-described differently. Set it to `false` to get one report per acquisition.
-
-The bound is relative because the difference it absorbs is a ratio. A sidecar
-states the readout in one of two ways, and they measure different spans of the
-same echo train: `TotalReadoutTime` is `EES × (N − 1)`, the first echo centre to
-the last, while `1/BandwidthPerPixelPhaseEncode` is `EES × N`, the whole readout
-including the final echo spacing. They differ by exactly one echo spacing — as a
-fraction, `1/(N − 1)`, where `N` is `ReconMatrixPE`. Fence posts and rails: `N`
-posts have `N − 1` rails between them, and one rail matters more on a short
-fence. So the artefact is 0.72% at a 140-line matrix, 0.79% at 128, 1.59% at 64:
-
-| `ReconMatrixPE` | same acquisition, read two ways |
-|---|---|
-| 140 | 0.719% |
-| 128 | 0.787% |
-| 96 | 1.053% |
-| 64 | 1.587% |
-| 59 | 1.724% — the edge of the default bound |
-
-1.75% therefore covers every matrix a brain DWI is acquired at. Both ends of the
-bound were measured rather than assumed: in a real multi-site study the closest
-pair of *genuinely different* scanners was 3.093% apart, so the default leaves
-1.34 percentage points of daylight beneath a difference that must never be
-merged. Narrow `pool_readout_tolerance` if your sites are closer together than
-that.
-
-Everything about it is disclosed, because a rewritten database no longer says
-what the scanner said: `cohorts.json` records `harmonised.per_subject` with every
-subject's original value, the log warns, and `product.json` carries the warning
-and names what it costs. Motion, outlier and CNR indices do not depend on the
-acquisition parameters and stay comparable; the distortion-derived index
-(`qc_vox_displ_std`) does, and does not.
-
-### Subjects processed before this App existed
-
-Nothing needs reprocessing. `eddy_quad` has always published `qc.json`, and that
-is all `eddy_squad` reads — so an older task's `output/qc/eddy_quad/` is a valid
-input, and old and new subjects pool together as long as `eddy` ran with the
-same features. Two things differ: those datasets carry no `squad_ready.json`, so
-subject labels come from brainlife's input metadata or the directory name (use
-`subject_labels` if neither is right), and to see one subject's signature
-without a group run, summarise its database directly:
-
-```bash
-python3 python/eddyqc_summary.py --qc-json <task>/output/qc/eddy_quad/qc.json \
-    --subject sub-01 --out squad_ready.json
-```
+Because a rewritten database no longer says exactly what the scanner said, every
+merge is disclosed: `cohorts.json` records each subject's original value, the
+log warns, and `product.json` names what it costs. Motion, outlier and CNR
+indices do not depend on those parameters and stay comparable; the
+distortion-derived index does, and does not. Set it to `false` for one report
+per acquisition.
 
 ### Group configuration
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `eddyqc` | — | The per-subject eddy QC datasets. A path to a `qc.json`, to any folder holding one (`eddyqc/`, an archived `qc` dataset, or an older task's `output/qc/eddy_quad/`), or a list of either |
-| `grouping_variable` | — | A `participants.tsv`-style table with a subject column and one value column, matched **by subject name**; or a file already in `eddy_squad`'s own format, matched by position. Class names (`MCG`, `UMN`) are encoded to integers, since SQUAD reads the column with numpy |
+| `eddyqc` | — | The per-subject eddy QC datasets. A path to a `qc.json`, to any folder holding one, or a list of either |
+| `grouping_variable` | — | A `participants.tsv`-style table with a subject column and one value column, matched **by subject name**; or a file already in `eddy_squad`'s own format, matched by position |
 | `variable_name` / `variable_is_continuous` | column name / `false` | Label for the variable, and whether to draw scatter plots with a regression fit (continuous) or violin plots per class (categorical) |
-| `update_single_subject_reports` | `true` | Also rewrite each subject's own report with study-wise context. Needs that subject's `qc.pdf` among the inputs |
-| `cohort` | largest | The signature (or its short hash) of the cohort to report on |
-| `require_homogeneous` | `false` | Fail when the inputs split into more than one cohort, instead of choosing the largest |
-| `pool_across_acquisition` | `true` | Pool cohorts that differ only in `data_eddy_para`, by rewriting it in the staged copies. Bounded and disclosed — see above. `false` gives one report per acquisition |
-| `pool_readout_tolerance` | `0.0175` | How far apart two readout times may be, **as a fraction of the reference site's**, and still be called the same acquisition |
+| `update_single_subject_reports` | `true` | Also rewrite each subject's own report with study-wise context |
+| `cohort` | largest | Which group of subjects to report on |
+| `require_homogeneous` | `false` | Fail when the inputs split into more than one group, instead of choosing the largest |
+| `pool_across_acquisition` | `true` | Pool groups that differ only in the readout time, as described above |
+| `pool_readout_tolerance` | `0.0175` | How far apart two readout times may be, as a fraction of the reference site's, and still count as the same acquisition |
 | `min_subjects` | `2` | Refuse to call a smaller group a study |
-| `signature_fields` | the five SQUAD compares exactly | Which acquisition fields decide cohort membership. Drop one your FSL tolerates, or add `data_unique_bvals` / `data_vox_size` to compare them exactly rather than within SQUAD's tolerance |
-| `subject_labels` | from the data | Comma-separated labels overriding the ones taken from `squad_ready.json` / `_inputs` |
+| `subject_labels` | from the data | Comma-separated labels overriding the ones taken from the input metadata |
 
-The grouping variable is matched by name wherever it can be: `eddy_squad` itself
-matches values to subjects by line position, which silently attributes one
-subject's value to another as soon as a subject is excluded from the cohort.
-Supplying a table with a subject column lets the App order the values to match
-the subject list it actually staged, and refuse when a value is missing.
+Class **names** work as grouping values. `eddy_squad` cannot read them — it
+parses the column as numbers — so the App encodes named classes to integers in
+sorted order, hands SQUAD the numbers, and publishes the mapping in
+`cohorts.json` and on the task page. The report's group axes are therefore
+labelled `0` and `1`; the task page says which is which. Numeric values pass
+through untouched. A variable marked `variable_is_continuous` must be numeric.
 
-The values themselves may be class **names**. `eddy_squad` cannot read them — it
-parses the column with `np.genfromtxt(gVar, dtype=None, names=True)`, so `MCG`
-raises `ValueError: Cannot convert string 'MCG'` before a plot is drawn — so the
-App encodes named classes to integers in sorted order, hands SQUAD the numbers,
-and publishes the mapping in `cohorts.json` (`variable.encoding`) and on the task
-page. The report's group axes are therefore labelled `0` and `1`; the task page
-says which is which. Values that are already numeric are passed through
-untouched, never renumbered. A variable marked `variable_is_continuous` must be
-numeric, since a regression through encoded class names would be a number
-without a meaning; that combination is refused.
+The grouping variable is matched by name wherever it can be, because
+`eddy_squad` itself matches values to subjects by line position — which
+silently attributes one subject's value to another as soon as a subject is
+excluded. Supplying a table with a subject column lets the App order the values
+to match the subjects it actually used, and refuse when one is missing.
 
 ## Configuration
 
-Every parameter is optional; `config.json.example` lists them all with their
-defaults. Below, each parameter is grouped by the stage it belongs to.
+Every parameter is optional. The defaults are what most data wants.
 
 ### Labels
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `subject` / `session` | from input metadata | Labels written into the results, the ROI tables and the QC database |
-| `split_subject_session` | `false` | Split a session off the end of the subject label (`sub01-MR03` → `sub01` + `MR03`). Off by default: an explicit `session`, or brainlife's input metadata, is always preferred to guessing from a string |
-| `session_prefixes` | `ses,MR,visit,tp,V` | The suffix prefixes `split_subject_session` recognises as a session |
+| `subject` / `session` | from input metadata | Labels written into the results |
+| `split_subject_session` | `false` | Split a session off the end of the subject label (`sub01-MR03` → `sub01` + `MR03`) |
+| `session_prefixes` | `ses,MR,visit,tp,V` | The suffixes `split_subject_session` recognises |
 
-### Acquisition parameters
+### Acquisition
 
-The first three replace something the app would otherwise derive from the
-sidecars; the rest are thresholds it derives with.
+Set these only when the sidecars are incomplete or wrong.
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `pe_dir` / `rpe_dir` | `auto` | Phase-encoding direction of each series, e.g. `j-`. Setting them *states* the sign instead of assuming it, which is what clears the unsigned-`PhaseEncodingAxis` stop — set them the same way round for every subject in a study, or the two conventions split in SQUAD |
+| `pe_dir` / `rpe_dir` | `auto` | Phase-encoding direction of each series, e.g. `j-`. Set them the same way round for every subject in a study |
 | `readout_time` / `rreadout_time` | `auto` | Total readout time of each series, in seconds |
-| `acqp` / `index` | derived | Supply `acqparams.txt` / `index.txt` directly, replacing the values derived from the sidecars. For datasets whose sidecars are incomplete |
-| `b0_threshold` | `50` | A volume with a b-value at or below this counts as unweighted. Also what restores `0 0 0` in the rotated gradient table |
-| `b0_per_pedir` | `2` | How many b=0 volumes per phase-encode direction go into `topup`, once there are enough to thin |
-| `reduce_b0_above` | `8` | Use every b=0 for `topup` while there are fewer than this many |
+| `b0_threshold` | `50` | A volume at or below this b-value counts as unweighted |
 
-### Stage 0 — merge, denoise, slice specification
+### Denoising and the slice specification
 
 | Parameter | Default | Meaning |
 |---|---|---|
 | `denoise` / `degibbs` | `true` | MP-PCA denoising / Gibbs ringing removal |
-| `slice_order` | `auto` | How the `eddy` slice specification is obtained when no `slspec` **input** is given (that file wins if present). `auto` derives it from `SliceTiming`; `ascending`, `descending`, `interleaved`, `rev_interleaved`, `philips_default` or `step` declare it from the protocol instead, for sidecars carrying no timings |
-| `multiband` / `slice_packages` / `slice_step` | from the sidecar, else `1` / `1` / — | Protocol parameters used with a declared `slice_order`. `multiband` falls back to `MultibandAccelerationFactor` (Siemens) or `ParallelReductionFactorOutOfPlane` (Philips MB-SENSE) |
+| `slice_order` | `auto` | `auto` derives the slice specification from `SliceTiming`. `ascending`, `descending`, `interleaved`, `rev_interleaved`, `philips_default` or `step` declare it from the protocol instead, for sidecars carrying no timings |
+| `multiband` / `slice_packages` / `slice_step` | from the sidecar, else `1` / `1` / — | Protocol parameters used with a declared `slice_order` |
 
-### Stage 1 — topup and brain extraction
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `topup_config` | `auto` | FSL topup schedule, chosen from the matrix size: `b02b0_4.cnf`, `b02b0_2.cnf` or `b02b0_1.cnf` as the dimensions divide by 4, 2 or neither. Name one explicitly to override |
-| `topup_extra` | `--estmov=1,1,0,0,0,0,0,0,0 --minmet=0,0,1,1,1,1,1,1,1` | Flags appended to the `topup` command line verbatim |
-| `bet_topup_f` | `0.4` | `bet` fractional threshold for the mask `eddy` is given |
-
-### Stage 2 — eddy
-
-Changing `eddy_repol`, `eddy_cnr_maps` or `eddy_residuals` between subjects
-gives them different QC flags, which splits a SQUAD cohort — see
-[Cohorts, and why a group run can refuse](#cohorts-and-why-a-group-run-can-refuse).
+### Distortion and brain extraction
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `eddy_repol` | `true` | Detect and replace outlier slices |
-| `eddy_ol_type` | `both` | Scope of outlier detection, passed to `--ol_type`. `both` and `gw` need the multiband structure and degrade to `sw` when no slice specification is available |
-| `eddy_niter` / `eddy_fwhm` | `6` / `10,6,0,0,0,0` | Eddy iterations and per-iteration smoothing. `eddy_fwhm` must have exactly `eddy_niter` entries |
-| `eddy_mporder` / `eddy_s2v_niter` | `6` / `6` | Order of the slice-to-volume motion model and its iterations (CUDA only) |
-| `eddy_data_is_shelled` | `true` | Pass `--data_is_shelled`, so `eddy` accepts a shell layout it would otherwise reject |
-| `eddy_cnr_maps` | `true` | Write CNR maps, which `eddy_quad` reports on |
-| `eddy_residuals` | `false` | Write per-volume residuals |
-| `eddy_slm` | `none` | Second-level model for the eddy-current field, passed to `--slm` when not `none` |
-| `eddy_extra` | — | Flags appended to the `eddy` command line verbatim |
-| `eddy_binary` | auto-detected | Name the `eddy` build to run, overriding the CUDA-then-CPU search. It must be on `PATH` |
+| `topup_config` | `auto` | Chosen from the matrix size. Name a config explicitly to override |
+| `bet_topup_f` | `0.4` | `bet` threshold for the mask `eddy` is given |
+| `bet_final_f` | `0.3` | `bet` threshold for the published `neuro/mask` |
+
+### Motion and eddy-current correction
+
+| Parameter | Default | Meaning |
+|---|---|---|
 | `require_gpu` | `false` | `true` fails when no GPU is visible; `false` falls back to a CPU eddy and skips slice-to-volume correction |
-| `eddy_qc` | `true` | Run `eddy_quad`. With this off there is no `eddyqc` dataset and no group QC input |
+| `eddy_repol` | `true` | Detect and replace outlier slices |
+| `eddy_ol_type` | `both` | Scope of outlier detection. `both` and `gw` need the multiband structure and fall back to `sw` without it |
+| `eddy_niter` / `eddy_fwhm` | `6` / `10,6,0,0,0,0` | Iterations and per-iteration smoothing. `eddy_fwhm` must have exactly `eddy_niter` entries |
+| `eddy_mporder` / `eddy_s2v_niter` | `6` / `6` | Slice-to-volume motion model order and iterations (GPU only) |
+| `eddy_cnr_maps` / `eddy_residuals` | `true` / `false` | Write CNR maps / per-volume residuals |
+| `eddy_slm` | `none` | Second-level model for the eddy-current field |
+| `eddy_qc` | `true` | Run `eddy_quad`. With this off there is no group QC dataset |
 
-### Brain mask (stages 1 and 3)
+Keeping `eddy_repol`, `eddy_cnr_maps` and `eddy_residuals` the same across a
+study matters: changing them between subjects gives those subjects different QC
+metrics, which splits a group SQUAD run.
 
-Nine parameters, with their defaults and the reasoning behind them, are
-documented under [Brain mask coverage](#brain-mask-coverage): `mask_check`, `mask_repair`,
-`mask_repair_f`, `mask_warn_fraction`, `mask_min_defect_block`,
-`mask_repair_cap`, `mask_repair_cap_final`, `mask_repair_grow`, `mask_figure`.
+### Brain mask
 
-### Stage 3 — bias correction and the tensor fit
+Described under [Quality control](#quality-control) above.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `mask_check` | `true` | Measure both masks against the image |
+| `mask_repair` | `auto` | `auto` repairs only a mask the check flags; `always` repairs every subject's, so a study is processed identically; `never` reports and changes nothing |
+| `mask_repair_f` | `auto` | `bet` threshold for the permissive estimate. `auto` is the stage's own threshold minus 0.2 |
+| `mask_warn_fraction` | `0.01` | How much brain-bright signal outside the mask, as a fraction of its volume, counts as missing brain |
+| `mask_min_defect_block` | `0.35` | How concentrated a defect has to be before it counts as one rather than the ragged edge every mask has |
+| `mask_repair_cap` / `mask_repair_cap_final` | `0.25` / `0.1` | Discard the repair if it would add more than this fraction of the mask |
+| `mask_repair_grow` | `0` | Extra intensity-growth iterations on the stage-1 mask. Off by default |
+| `mask_figure` | `true` | Write the overlay PNGs |
+
+### The tensor fit
 
 | Parameter | Default | Meaning |
 |---|---|---|
 | `biascorrect` | `ants` | B1 bias correction: `ants`, `fsl` or `none` |
-| `bet_final_f` | `0.3` | `bet` fractional threshold for the published `neuro/mask` |
 | `dtifit_shell` | `lowest` | Which shell to fit: `lowest`, `highest`, `all`, or a b-value such as `1500`. `lowest`/`highest` rank only the diffusion-weighted shells |
-| `shell_tolerance` | `100` | The b-value gap that starts a new shell when the shells are detected |
-| `dtifit_wls` | `false` | Fit by weighted least squares (`dtifit --wls`) |
-| `dtifit_sse` | `false` | Also write the sum of squared errors (`dtifit --sse`) |
+| `shell_tolerance` | `100` | The b-value gap that separates two shells |
+| `dtifit_wls` | `false` | Fit by weighted least squares |
+| `dtifit_sse` | `false` | Also write the sum of squared errors |
 
-### Stages 4 and 5 — atlas and ROI statistics
+### Atlas and ROI statistics
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `atlas_registration` | `true` | Set false to stop after preprocessing and the tensor fit, publishing no `roistats` or `reg` |
-| `ants_transform` | `s` | Transform type passed to `antsRegistrationSyN.sh -t` |
-| `atlas_interpolation` | `MultiLabel` | Interpolation used when warping atlas labels. `Linear` and `BSpline` are rounded back to integers afterwards |
-| `template_fa` / `atlas` | this repo's FA template / FSL's label image | Override the FA template registered to and the label image warped — see [Requirements](#requirements) |
-| `atlas_labels` | `templates/JHU-ICBM-labels.json` | ROI names and abbreviations for the label image |
-| `write_roi_masks` | `false` | Also write one binary `Roi_<n>.nii.gz` per label into `reg/roi/` |
-| `roi_metrics` | `FA, MD, AD, RD` | Metrics to summarise per ROI. Anything other than FA, MD, AD or RD is warned about and skipped |
+| `atlas_registration` | `true` | Set false to stop after preprocessing and the tensor fit |
+| `atlas_interpolation` | `MultiLabel` | Interpolation used when warping atlas labels |
+| `roi_metrics` | `FA, MD, AD, RD` | Metrics to summarise per ROI |
 | `roi_restrict_to_mask` | `true` | Intersect every ROI with the brain mask before averaging |
 | `roi_exclude_zeros` | `false` | Drop exactly-zero voxels from each ROI average |
-
-### Resources
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `nthreads` | all cores | Threads for MRtrix3, ANTs and OpenMP. `0` also means all cores |
+| `write_roi_masks` | `false` | Also write one binary mask per ROI |
+| `nthreads` | all cores | Threads for MRtrix3, ANTs and OpenMP |
 
 A GPU is strongly recommended: slice-to-volume correction requires a CUDA build
 of `eddy`. Without one the app completes but skips it.
+
+A few further parameters exist as escape hatches for unusual data — supplying
+`acqparams.txt` and `index.txt` directly, passing extra flags to `topup` or
+`eddy`, naming a specific `eddy` build, or overriding the atlas files. They are
+listed with their defaults in `config.json.example`, and are not needed for data
+whose sidecars are complete.
 
 ## Running it
 
@@ -561,8 +368,8 @@ of `eddy`. Without one the app completes but skips it.
 or add it to a pipeline rule to process a whole project. The group QC App is
 submitted the same way, against the `eddyqc` datasets of a processed project.
 
-**Locally**, the app runs from a directory containing a `config.json` that names
-your files:
+**Locally**, the app runs from a directory containing a `config.json` naming your
+files:
 
 ```bash
 git clone https://github.com/adanyike/app-brain-dwi-preproc-slim.git
@@ -573,128 +380,29 @@ $EDITOR config.json
 
 `main` selects Singularity, Docker or a local toolchain automatically and passes
 a GPU through when one is present. Results appear in `output/` and
-`product.json`.
+`product.json`. For a group QC run, start from `config.json.squad.example`
+instead; `main` recognises it by its `eddyqc` input.
 
-For a group QC run, start from `config.json.squad.example` instead; `main`
-recognises it by its `eddyqc` input and runs `run_squad.sh`. No GPU is needed —
-it reads the QC databases, not the images.
-
-The container is pulled, not built: `main` defaults to
-`docker://nyeguh/brain-dwi-preproc-slim:1.0.0`. Point `APP_IMAGE` at another tag
-or a local `.sif` to override it, and `EXTRA_BIND` at any input data living
+The container is pulled, not built. Point `APP_IMAGE` at another tag or a local
+`.sif` to override the default, and `EXTRA_BIND` at any input data living
 outside the working directory.
-
-### Running part of the pipeline
-
-`run.sh` is the in-container driver, and it takes a stage range — which is how a
-failed run is resumed rather than repeated:
-
-```bash
-./run.sh                 # every stage, 0 through 6
-./run.sh --from 3        # resume at the tensor fit, reusing work/state.sh
-./run.sh --to 2          # stop after eddy
-./run.sh --only 4 5      # just the atlas stages
-```
-
-Stages are `0` prepare, `1` topup, `2` eddy, `3` tensor fit, `4` atlas
-registration, `5` ROI statistics, `6` outputs. Resuming reads `work/state.sh`, so
-the working directory the earlier stages wrote has to still be there.
-
-`main` takes no arguments and forwards none, so a stage range is given to
-`run.sh` directly — either inside the container, which is what `main` would have
-done for you, or against a host toolchain:
-
-```bash
-singularity exec --nv -B "$PWD:$PWD" -B "$APP_DIR:$APP_DIR" --pwd "$PWD" \
-    docker://nyeguh/brain-dwi-preproc-slim:1.0.0 ./run.sh --from 3
-
-SKIP_CONTAINER=1 ./run.sh --from 3   # FSL, MRtrix3 and ANTs already on PATH
-```
-
-### The test suite
-
-```bash
-bash test/run_tests.sh              # unit tests, static checks and the dry runs
-bash test/run_tests.sh --no-dryrun  # unit tests and static checks only
-```
-
-`test/run_tests.sh` exercises every stage against a stub toolchain, so it needs
-no FSL, MRtrix3 or ANTs. It does need **numpy and nibabel**, the same two
-packages `run.sh` requires: the stage dry runs and the group QC dry runs — the
-part that exercises the stages — are *skipped with a message* when those are not
-importable, leaving the unit tests and static checks to pass on their own. Check
-the output for `skipped` rather than assuming `all checks passed` covered the
-pipeline. `shellcheck` is used when installed and skipped when not.
 
 ## Requirements
 
 Provided by the container:
 
-| | Version | Needed for |
-|---|---|---|
-| FSL | 6.0.7.23 | `topup`, `eddy`, `bet`, `dtifit`, `eddy_quad`, `eddy_squad` |
-| MRtrix3 | 3.0.8 | denoising, Gibbs removal, shell extraction, bias correction |
-| ANTs | 2.6.5 | N4 bias correction, atlas registration |
-| Python 3 + numpy + nibabel | ≥ 1.24 / ≥ 5.1 | every stage: `run.sh` refuses to start without them |
-| PyPDF2 | `<3`, in **FSL's** interpreter | only `eddy_squad`'s single-subject report update |
-
-The two Python requirements are separate installations on purpose. numpy and
-nibabel go into the system interpreter, which is what this app's own
-`python/` modules run under. PyPDF2 goes into `$FSLDIR/bin/python`, because
-`eddy_squad` runs under FSL's interpreter and not the system one, and FSL does
-not ship it; without it the group report is still published and only the
-single-subject update is skipped.
-
-Running outside the container means providing all of these yourself. A missing
-tool is caught up front — `run.sh` checks for each executable and imports numpy
-and nibabel before stage 0 does any work.
-
-### The atlas files
-
-The atlas stage uses two images from different places. The FA template it
-registers to is this repository's `templates/JHU-ICBM-FA-1mm.nii.gz`, so the
-registration target is the same image however the app is run and whatever FSL
-release is installed. The label image it warps is FSL's, read from
-`$FSLDIR/data/atlases/JHU`, along with the label list the ROI names are checked
-against; the names and abbreviations themselves live in
-`templates/JHU-ICBM-labels.json`, and FSL listed 48 of the 50 regions before
-6.0.5. The self-test refuses to build an image whose label list and label image
-disagree on how many regions there are, or whose template and label image do not
-share a grid — the transform is estimated from one and applied to the other.
-
-`templates/JHU-labels.xml` is a copy of FSL's own label list, kept in the
-repository for reference. Nothing reads it: the pipeline takes its names from
-`templates/JHU-ICBM-labels.json`, and the self-test compares that file against
-the image's own copy at `$FSLDIR/data/atlases/JHU-labels.xml`.
-
-## The container
-
-The pipeline is the full app's; the image is not. FSL, MRtrix3 and ANTs are
-installed in a builder stage, then FSL is pruned to the subsystems this pipeline
-executes and the ANTs and MRtrix3 programs it calls are collected with exactly
-the libraries `ldd` reports for them. The runtime stage copies only those trees,
-so the removed bytes never exist in a lower layer where they would still be
-pulled.
-
-| Script | What it does |
+| | Version |
 |---|---|
-| `docker/prune-fsl.sh` | A documented blacklist of FSL subsystems this pipeline never touches — FSLeyes and the Qt6/VTK/Mesa stack beneath it, the conda sysroot and LLVM/clang libraries, OpenVINO, FIRST and MIST models, standard spaces, the Oxford-MM template, POSSUM, XTRACT, FIX macaque masks, sources, headers, docs and the conda cache, and every atlas but the JHU label image and label list. matplotlib, pandas and seaborn are deliberately kept: `eddy_quad` renders its report with matplotlib and `eddy_squad` draws its study-wise plots with seaborn |
-| `docker/collect-binaries.sh` | Copies named programs plus, via `ldd`, the libraries they need from inside their own prefix. A program that is not found fails the build. Applied to ANTs only — 2.6 GB to 135 MB, four programs out of ~200 — since trimming MRtrix3 would have saved 72 MB against the risk of a missing binary surfacing at run time instead of at build time |
-| `docker/selftest.sh` | The final build step: every tool is **executed**, not just located, so a dynamic-linker error from over-pruning fails the build rather than someone's task. CUDA binaries are checked by linkage instead, because CUDA base images omit `libcuda.so.1` and the runtime injects it at `--gpus` / `--nv` time. Also verifies topup's config files, the JHU atlas files and a NIfTI round trip |
+| FSL | 6.0.7.23 |
+| MRtrix3 | 3.0.8 |
+| ANTs | 2.6.5 |
 
-Two build guards are worth knowing: the build fails when the FSL release ships
-no `eddy_cuda` binary, rather than producing an image that silently skips
-slice-to-volume correction (`--build-arg REQUIRE_CUDA_EDDY=0` for a deliberately
-CPU-only image), and it patches FSL 6.0.7.x's `squad_update`, which otherwise
-dies on every group run *after* writing the group database.
+The FA template the atlas stage registers to is this repository's own copy, so
+the registration target is the same image however the app is run and whatever
+FSL release is installed. The label image it warps is FSL's. All 50 JHU
+ICBM-DTI-81 regions are reported.
 
-Because the analysis must not vary between the two apps, `test/test_parity.sh`
-compares everything shared — `src/`, `python/`, `templates/`, `test/`, `run.sh`,
-`config.json.example`, `LICENSE` and `main` — against the full app byte for byte
-and fails on any drift. Only the Dockerfile and its helpers, the app's identity
-(`package.json`, `main`'s default image) and the documentation are allowed to
-differ. It skips when the sibling app is not
-checked out beside this one, so a standalone clone still tests clean.
+The container is published, so nothing needs building to run the app.
 
 ## Citing
 
