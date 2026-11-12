@@ -121,7 +121,8 @@ the log, on the task page and in `product.json`, because it changes `eddy`'s
 result.
 
 `qc/` holds the measurements (`mask_qc_eddy.json`, `mask_qc_final.json`),
-overlays (`mask_overlay_*.png`: missing brain in yellow, repairs in green), and
+overlays (`mask_overlay_*.png`: the mask outlined in red, missing brain in
+yellow, repairs in green), and
 the mask and image `eddy` actually used (`eddy_mask.nii.gz`,
 `eddy_meanb0.nii.gz`).
 

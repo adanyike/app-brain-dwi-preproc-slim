@@ -94,7 +94,9 @@ check_file() {  # check_file <description> <path>
 }
 
 echo "FSL"
-for tool in fslval fslroi fslmerge fslmaths bet topup dtifit; do
+# fast is not called directly: `biascorrect: fsl` runs it through MRtrix3's
+# dwibiascorrect, so nothing else would notice it had been pruned.
+for tool in fslval fslroi fslmerge fslmaths bet topup dtifit fast; do
     check_runs "$tool"
 done
 # topup reads its configuration from $FSLDIR/etc/flirtsch at run time, so the

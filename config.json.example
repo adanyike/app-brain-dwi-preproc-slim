@@ -60,6 +60,9 @@
   "dtifit_sse": false,
   "atlas_registration": true,
   "ants_transform": "s",
+  "template_fa": "",
+  "atlas": "",
+  "atlas_labels": "",
   "atlas_interpolation": "MultiLabel",
   "write_roi_masks": false,
   "roi_metrics": [

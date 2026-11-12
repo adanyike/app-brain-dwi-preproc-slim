@@ -12,5 +12,7 @@
   "pool_across_acquisition": true,
   "pool_readout_tolerance": 0.0175,
   "cohort": "",
-  "min_subjects": 2
+  "min_subjects": 2,
+  "signature_fields": "",
+  "subject_labels": ""
 }
