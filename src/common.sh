@@ -11,8 +11,8 @@ OUT_DIR="${OUT_DIR:-$PWD/output}"
 CONFIG="${CONFIG:-$PWD/config.json}"
 TEMPLATE_DIR="${TEMPLATE_DIR:-$APP_DIR/templates}"
 FSLDIR="${FSLDIR:-/opt/fsl}"
-# The JHU ICBM-DTI-81 FA template and label image ship with FSL, so the app
-# reads them from the installation rather than carrying its own copies.
+# The JHU ICBM-DTI-81 label image and its label list come from FSL. The FA
+# template the atlas stage registers to is this app's own copy, in templates/.
 JHU_DIR="${JHU_DIR:-$FSLDIR/data/atlases/JHU}"
 
 log()  { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }

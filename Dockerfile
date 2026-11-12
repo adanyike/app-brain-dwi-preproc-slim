@@ -2,12 +2,11 @@
 #
 #   docker build -t <you>/brain-dwi-preproc-slim:1.0.0 .
 #
-# Same pipeline as ../brainlife, same pinned tool versions, built to be small.
-# The full image installs three complete neuroimaging distributions; this one
-# keeps only what the pipeline executes.
+# Built to be small: rather than shipping three complete neuroimaging
+# distributions, it keeps only what the pipeline executes.
 #
-# Two stages. The builder installs everything exactly as the full image does,
-# then prunes FSL and resolves the ANTs and MRtrix3 binaries this app calls,
+# Two stages. The builder installs the complete toolchain, then prunes FSL and
+# resolves the ANTs and MRtrix3 binaries this app calls,
 # with their libraries, via ldd. The runtime stage starts from a clean base and
 # copies in only those trees, so nothing deleted survives in a lower layer.
 #
@@ -15,8 +14,8 @@
 # tool. That is deliberate: over-pruning does not remove a binary, it removes
 # the library the binary loads, and `command -v` cannot see the difference.
 #
-# CUDA 11.8 / Ubuntu 22.04 is not a free choice -- see the comment in
-# ../brainlife/Dockerfile for why those two are locked together.
+# CUDA 11.8 / Ubuntu 22.04 is not a free choice: FSL's eddy_cuda for this
+# release is built against that pair. Don't bump one without the other.
 
 # ========================================================== toolchain ========
 # Everything expensive and slow-changing: FSL, ANTs, and MRtrix3 compiled from
@@ -211,9 +210,10 @@ RUN { FSL_PY="${FSLDIR}/bin/python"; \
 # pruned, relocated, or drops off the front of PATH.
 RUN ln -sf /usr/bin/python3 /usr/local/bin/python
 
-# Slice-to-volume correction is CUDA-only and FSL has both renamed and once
-# omitted this binary, so glob rather than match known names. See
-# ../brainlife/Dockerfile for the full reasoning.
+# Slice-to-volume correction is CUDA-only, and FSL has both renamed this binary
+# (eddy_cuda9.1 ... eddy_cuda11.0, then a plain eddy_cuda) and, in 6.0.7.20,
+# shipped none at all. So glob rather than match known names, and fail the
+# build when there is none unless a CPU-only image is asked for.
 ARG REQUIRE_CUDA_EDDY=1
 RUN set -e; \
     found=""; \

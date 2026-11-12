@@ -61,7 +61,7 @@ FIT_BVALS="$MERGED_BVALS"
 SHELL_REPORT="$WORK_DIR/prep/shells.json"
 SHELL_ARG="$(python3 "$APP_DIR/python/shells.py" \
     --bvals "$MERGED_BVALS" \
-    --select "$(cfg dtifit_shell 1500)" \
+    --select "$(cfg dtifit_shell lowest)" \
     --b0-threshold "$(cfg b0_threshold 50)" \
     --tolerance "$(cfg shell_tolerance 100)" \
     --out "$SHELL_REPORT")"

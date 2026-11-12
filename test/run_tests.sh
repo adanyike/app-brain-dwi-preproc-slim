@@ -40,7 +40,6 @@ run "templates are present" bash -c '
 
 if command -v shellcheck >/dev/null 2>&1; then
     SHELLCHECK_TARGETS=(main run.sh run_squad.sh src/*.sh)
-    # The slim variant adds container build helpers.
     [ -d docker ] && SHELLCHECK_TARGETS+=(docker/*.sh)
     run "shellcheck" shellcheck -S warning -x "${SHELLCHECK_TARGETS[@]}"
 else
@@ -52,10 +51,6 @@ run "bash 3.2 portability" bash test/test_portability.sh
 run "config helpers"  bash test/test_config.sh
 run "main dispatch"   bash test/test_main.sh
 run "Dockerfile lint" bash test/test_dockerfile.sh
-# Only the slim variant carries this; it asserts the two apps have not drifted.
-if [ -f test/test_parity.sh ]; then
-    run "parity with the full app" bash test/test_parity.sh
-fi
 run "sidecar"         python3 test/test_sidecar.py -q
 run "make_slspec"     python3 test/test_make_slspec.py -q
 run "prepare_inputs"  python3 test/test_prepare_inputs.py -q
