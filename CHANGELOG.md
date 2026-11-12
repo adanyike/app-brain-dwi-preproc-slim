@@ -398,3 +398,6 @@ assumed; the App had not been registered when these were found.
   dataset in one submission shares; only ids unique to one entry are used now.
   Entries for other inputs (the grouping table) are skipped, so they no longer
   shift the positional fallback.
+- **`dtifit_shell` defaults to `lowest` even when the key is absent.** The
+  documented default and `config.json.example` said `lowest`, but a config
+  without the key fell back to `1500`, and failed on data with no b=1500 shell.

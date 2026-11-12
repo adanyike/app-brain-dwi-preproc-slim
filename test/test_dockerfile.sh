@@ -45,7 +45,7 @@ for ref in $(grep -oE '^COPY --from=[A-Za-z0-9_.:/-]+' "$DOCKERFILE" | cut -d= -
     fi
 done
 
-# 3. Where a self-test exists (the slim variant), it must be the final RUN: it
+# 3. Where a self-test exists, it must be the final RUN: it
 #    is what proves the trimming did not break anything, so nothing may modify
 #    the image after it.
 if [ -f "$HERE/../docker/selftest.sh" ]; then

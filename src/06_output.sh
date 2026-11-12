@@ -52,11 +52,11 @@ cp "$MERGED_BVALS"    "$OUT_DIR/dwi/dwi.bvals"
 DWI_JSON="${DWI_JSON:-$(cfg_path dwi_json)}"
 if [ -n "$DWI_JSON" ]; then
     jq --argjson n "$NVOL_TOTAL" \
-       '. + {ProcessingPipeline: "brainlife app-brain-dwi-preproc",
+       '. + {ProcessingPipeline: "brainlife app-brain-dwi-preproc-slim",
              NumberOfVolumes: $n}' "$DWI_JSON" > "$OUT_DIR/dwi/dwi.json"
 else
     jq -n --argjson n "$NVOL_TOTAL" \
-       '{ProcessingPipeline: "brainlife app-brain-dwi-preproc", NumberOfVolumes: $n}' \
+       '{ProcessingPipeline: "brainlife app-brain-dwi-preproc-slim", NumberOfVolumes: $n}' \
        > "$OUT_DIR/dwi/dwi.json"
 fi
 

@@ -1,7 +1,7 @@
 {
   "name": "app-brain-dwi-preproc-slim",
   "version": "1.0.0",
-  "description": "Brain diffusion MRI preprocessing with reverse phase-encode distortion correction (topup), slice-to-volume motion correction (eddy_cuda), DTI fitting, and JHU ICBM-DTI-81 white-matter ROI extraction. Slim container: identical pipeline to app-brain-dwi-preproc, built with only the tools it runs.",
+  "description": "Brain diffusion MRI preprocessing with reverse phase-encode distortion correction (topup), slice-to-volume motion correction (eddy_cuda), DTI fitting, and JHU ICBM-DTI-81 white-matter ROI extraction. Slim container, built with only the tools the pipeline runs.",
   "license": "MIT",
   "scripts": {
     "start": "./main",
