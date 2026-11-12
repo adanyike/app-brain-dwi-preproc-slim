@@ -75,13 +75,18 @@ check "an unrecognised mode is refused" "unrecognised mode" "$out"
 # brainlife collects each output from <task dir>/<output ID>/, so a brainlife
 # task (recognised by the keys brainlife writes) writes there; a local run keeps
 # ./output.
+#
+# The clean-up checks look for a stale *file*, not for the directory: the driver
+# runs after the clean-up, and on a machine with FSL installed it gets far
+# enough to recreate an empty output directory before failing on the dummy
+# inputs.
 mkdir -p "$TMP/bl/tensor" "$TMP/bl/squad"
 touch "$TMP/bl/tensor/stale.nii.gz" "$TMP/bl/squad/keep"
 printf '{"_app": "x", "_inputs": [], "dwi": "../stage/ds/dwi.nii.gz"}\n' > "$TMP/bl/config.json"
 out="$(run_main_in "$TMP/bl" SKIP_CONTAINER=1)"
 check "a brainlife task writes to the task directory" "outputs: $TMP/bl"$'\n' "$out"$'\n'
 check "the previous attempt's outputs are cleared" "cleared" \
-      "$([ ! -e "$TMP/bl/tensor" ] && echo cleared)"
+      "$([ ! -e "$TMP/bl/tensor/stale.nii.gz" ] && echo cleared)"
 check "the other App's output directory is left alone" "kept" \
       "$([ -e "$TMP/bl/squad/keep" ] && echo kept)"
 check "no ./output on brainlife" "absent" "$([ ! -e "$TMP/bl/output" ] && echo absent)"
@@ -103,11 +108,12 @@ check "clearing an input directory is refused" "reads an input from it" "$out"
 check "and the input survives" "kept" "$([ -f "$TMP/guard/dwi/dwi.nii.gz" ] && echo kept)"
 
 mkdir -p "$TMP/blgroup/squad" "$TMP/blgroup/tensor"
+touch "$TMP/blgroup/squad/stale.pdf" "$TMP/blgroup/tensor/keep"
 printf '{"_tid": 2, "eddyqc": ["a", "b"]}\n' > "$TMP/blgroup/config.json"
 out="$(run_main_in "$TMP/blgroup" SKIP_CONTAINER=1)"
 check "a brainlife group task writes to the task directory" "outputs: $TMP/blgroup"$'\n' "$out"$'\n'
 check "and clears only squad/" "squad-cleared tensor-kept" \
-      "$([ ! -e "$TMP/blgroup/squad" ] && printf squad-cleared) $([ -d "$TMP/blgroup/tensor" ] && printf tensor-kept)"
+      "$([ ! -e "$TMP/blgroup/squad/stale.pdf" ] && printf squad-cleared) $([ -e "$TMP/blgroup/tensor/keep" ] && printf tensor-kept)"
 
 # The routing must not depend on jq: the container carries it, a cluster head
 # node need not.  Run main with a PATH that has everything it uses but jq.
