@@ -90,6 +90,18 @@ def pe_vector(pe_dir: str) -> List[float]:
     return vec
 
 
+def sidecar_source(path: str | None, declared: str) -> str:
+    """Where a series' sidecar came from, for the provenance in prep.json.
+
+    The shell stage knows (a config key, a file beside the image, or brainlife's
+    input metadata) and says so with --json-source; without that, a path given
+    is simply "file" and no path at all is "none".
+    """
+    if declared:
+        return declared
+    return "file" if path else "none"
+
+
 def load_meta(path: str | None) -> dict:
     if not path:
         return {}
@@ -337,6 +349,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--bvals", required=True)
     ap.add_argument("--bvecs", required=True)
     ap.add_argument("--json", help="sidecar for the forward series")
+    ap.add_argument("--json-source", default="",
+                    help="where the forward sidecar came from, for prep.json")
     ap.add_argument("--pe-dir", default="", help="override PhaseEncodingDirection, e.g. j-")
     ap.add_argument("--readout-time", type=float, help="override TotalReadoutTime, seconds")
     ap.add_argument("--nvols", type=int, required=True, help="volumes in the forward series")
@@ -344,6 +358,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--rbvals")
     ap.add_argument("--rbvecs")
     ap.add_argument("--rjson")
+    ap.add_argument("--rjson-source", default="")
     ap.add_argument("--rpe-dir", default="")
     ap.add_argument("--rreadout-time", type=float)
     ap.add_argument("--rnvols", type=int, default=0)
@@ -366,6 +381,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     meta_fwd = load_meta(args.json)
     pe_fwd, trt_fwd, src_fwd = series_pe(meta_fwd, args.pe_dir,
                                          args.readout_time, "dwi")
+    src_fwd["sidecar_source"] = sidecar_source(args.json, args.json_source)
     series_pe_rows = [pe_fwd + [trt_fwd]]
     series_sources = [src_fwd]
     series_of_volume = [0] * args.nvols
@@ -383,6 +399,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         meta_rev = load_meta(args.rjson)
         pe_rev, trt_rev, src_rev = series_pe(meta_rev, args.rpe_dir,
                                              args.rreadout_time, "rdwi", "r")
+        src_rev["sidecar_source"] = sidecar_source(args.rjson, args.rjson_source)
         series_sources.append(src_rev)
         if src_rev["trt_source"] != src_fwd["trt_source"]:
             # Each source is a slightly different definition of the same
@@ -469,7 +486,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             {"series": i, "vector": r[:3], "total_readout_time": r[3],
              "pe_dir": series_sources[i]["pe_dir"],
              "pe_source": series_sources[i]["pe_source"],
-             "readout_time_source": series_sources[i]["trt_source"]}
+             "readout_time_source": series_sources[i]["trt_source"],
+             "sidecar_source": series_sources[i]["sidecar_source"]}
             for i, r in enumerate(series_pe_rows)
         ],
         "b0_threshold": args.b0_threshold,

@@ -391,6 +391,27 @@ check "slice-to-volume enabled" bash -c '
 check "what was published is what was supplied" \
     cmp -s "$SCEN2/slspec.txt" "$SCEN2/output/qc/slspec.txt"
 
+# On brainlife a slspec can only arrive as a `raw` input, which maps to the
+# dataset directory rather than the file in it.
+printf '\n--- an slspec given as the directory holding it ---\n'
+SCEN4="$ROOT/15a-slspec-dir"
+cp -r "$SCEN2" "$SCEN4"
+rm -rf "$SCEN4/work" "$SCEN4/output"
+mkdir -p "$SCEN4/raw"
+mv "$SCEN4/slspec.txt" "$SCEN4/raw/slspec.txt"
+jq --arg s "$SCEN4/raw" '.slspec = $s' "$SCEN/config.json" > "$SCEN4/config.json"
+( cd "$SCEN4" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" --to 2 ) \
+    > "$SCEN4/log.txt" 2>&1
+check "pipeline exits 0" test $? -eq 0
+check "the file inside is used" bash -c '
+    grep -q -- "--slspec=.*slspec.txt" "'"$SCEN4"'/work/eddy/eddy_corrected.eddy_command_txt"'
+touch "$SCEN4/raw/other.txt"
+rm -rf "$SCEN4/work"
+( cd "$SCEN4" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" --to 0 ) \
+    > "$SCEN4/log2.txt" 2>&1
+check "two candidates are refused" test $? -ne 0
+check "and the error says why" grep -q "more than one candidate" "$SCEN4/log2.txt"
+
 # --- a slspec from a different protocol is refused, not handed to eddy ---
 printf '\n--- a slspec from another protocol is refused ---\n'
 SCEN3="$ROOT/15b-wrong-slspec"
@@ -675,6 +696,64 @@ check "it was not repaired" bash -c '
     [ "$(jq -r ".repair // \"none\"" "$1/maskqc/mask_qc_eddy.json")" = none ]' _ "$SCEN"
 check "and the log says why" \
     grep -q "implausible rather than merely tight" "$SCEN/log.txt"
+
+# ------------------------------------------------- a task shaped by brainlife ----
+# brainlife's neuro/dwi datatype has no sidecar file: the sidecar reaches the
+# App as the `meta` of each input's `_inputs` entry. And brainlife collects each
+# output from <task dir>/<output ID>/. Run through ./main, as brainlife does,
+# with the reverse series listed first so that position would give the forward
+# series the reverse series' PhaseEncodingDirection.
+printf '\n--- 18-brainlife-task ---\n'
+SCEN="$ROOT/18-brainlife-task"
+mkdir -p "$SCEN/meta"
+python3 "$HERE/make_test_data.py" --outdir "$SCEN/stage" >/dev/null
+mv "$SCEN/stage/dwi/dwi.json" "$SCEN/meta/dwi.json"
+mv "$SCEN/stage/rdwi/dwi.json" "$SCEN/meta/rdwi.json"
+base_config "$SCEN/stage" '{"eddy_binary":"eddy_cuda10.2"}' \
+    | jq --slurpfile f "$SCEN/meta/dwi.json" --slurpfile r "$SCEN/meta/rdwi.json" '
+        del(.dwi_json, .rdwi_json, .subject)
+        | ._app = "app-id" | ._tid = 2
+        | ._inputs = [
+            {id: "rdwi", keys: ["rdwi", "rbvals", "rbvecs"],
+             meta: ($r[0] + {subject: "sub-bl"})},
+            {id: "dwi", keys: ["dwi", "bvals", "bvecs"],
+             meta: ($f[0] + {subject: "sub-bl", session: "ses-03"})}]' \
+    > "$SCEN/config.json"
+( cd "$SCEN" && PATH="$ROOT/bin-gpu:$PATH" SKIP_CONTAINER=1 bash "$APP/main" ) \
+    > "$SCEN/log.txt" 2>&1
+check "main exits 0" test $? -eq 0
+[ -s "$SCEN/tensor/fa.nii.gz" ] || tail -20 "$SCEN/log.txt"
+check "every output is in <task dir>/<output ID>/" bash -c '
+    for f in dwi/dwi.nii.gz mask/mask.nii.gz tensor/fa.nii.gz roistats/roi_stats.csv \
+             reg qc/prep.json eddyqc/qc.json; do
+        [ -e "$1/$f" ] || { echo "missing $f"; exit 1; }
+    done' _ "$SCEN"
+check "nothing under ./output" test ! -e "$SCEN/output"
+check "the forward sidecar came from brainlife metadata" bash -c '
+    [ "$(jq -r ".phase_encoding[0].sidecar_source" "$1/qc/prep.json")" = brainlife-meta ]' _ "$SCEN"
+check "the reverse one too" bash -c '
+    [ "$(jq -r ".phase_encoding[1].sidecar_source" "$1/qc/prep.json")" = brainlife-meta ]' _ "$SCEN"
+check "each series got its own direction, not its position's" bash -c '
+    [ "$(jq -r "[.phase_encoding[].pe_dir] | join(\",\")" "$1/qc/prep.json")" = "j-,j" ]' _ "$SCEN"
+check "slice-to-volume from the metadata SliceTiming" bash -c '
+    [ -s "$1/qc/slspec.txt" ] && grep -q -- "--mporder" "$1/work/eddy/eddy_corrected.eddy_command_txt"' _ "$SCEN"
+check "the published dwi.json carries the sidecar" bash -c '
+    [ "$(jq -r .PhaseEncodingDirection "$1/dwi/dwi.json")" = "j-" ]' _ "$SCEN"
+check "subject and session from the metadata" bash -c '
+    [ "$(jq -r .subject "$1/eddyqc/squad_ready.json")" = sub-bl ]' _ "$SCEN"
+
+# A sidecar lying beside the image, unmapped, is found by name.
+printf '\n--- 18b-sidecar-beside-the-image ---\n'
+SCEN="$ROOT/18b-beside"
+mkdir -p "$SCEN"
+python3 "$HERE/make_test_data.py" --outdir "$SCEN/input" >/dev/null
+base_config "$SCEN/input" '{"eddy_binary":"eddy_openmp"}' \
+    | jq 'del(.dwi_json, .rdwi_json)' > "$SCEN/config.json"
+( cd "$SCEN" && PATH="$BIN:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) > "$SCEN/log.txt" 2>&1
+check "pipeline exits 0" test $? -eq 0
+check "both sidecars found beside their images" bash -c '
+    [ "$(jq -r "[.phase_encoding[].sidecar_source] | join(\",\")" "$1/output/qc/prep.json")" \
+      = "beside-image,beside-image" ]' _ "$SCEN"
 
 # ---------------------------------------------------------------------------
 printf '\n--- resume from a later stage ---\n'

@@ -5,6 +5,8 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 WORK_DIR="${WORK_DIR:-$PWD/work}"
+# ./output locally; `main` points this at the task directory itself on
+# brainlife, which collects each output from <task dir>/<output ID>/.
 OUT_DIR="${OUT_DIR:-$PWD/output}"
 CONFIG="${CONFIG:-$PWD/config.json}"
 TEMPLATE_DIR="${TEMPLATE_DIR:-$APP_DIR/templates}"
@@ -145,6 +147,90 @@ cfg_path() {
         esac
     fi
     printf '%s' "$(cd "$(dirname "$value")" && pwd)/$(basename "$value")"
+}
+
+# cfg_file <key> <preferred suffixes...> -- like cfg_path, but a directory is
+# accepted too and resolved to the one file inside it.
+#
+# brainlife has no datatype for a small text file, so an slspec or a grouping
+# table arrives as a `raw` input -- and a raw input's only file mapping is the
+# dataset directory itself. Locally the key names the file directly, and that
+# still works. Inside a directory, a single file with one of the preferred
+# suffixes wins, else the single visible file; anything ambiguous is refused,
+# because picking one of two candidates would be a guess about the acquisition.
+cfg_file() {
+    local key="$1"; shift
+    local value; value="$(cfg_path "$key")"
+    [ -z "$value" ] && return 0
+    [ -d "$value" ] || { printf '%s' "$value"; return 0; }
+
+    local files=() preferred=() entry suffix
+    for entry in "$value"/*; do
+        [ -f "$entry" ] || continue
+        files+=("$entry")
+        for suffix in "$@"; do
+            case "$entry" in *"$suffix") preferred+=("$entry"); break ;; esac
+        done
+    done
+    if [ ${#preferred[@]} -eq 1 ]; then printf '%s' "${preferred[0]}"; return 0; fi
+    if [ ${#preferred[@]} -eq 0 ] && [ ${#files[@]} -eq 1 ]; then printf '%s' "${files[0]}"; return 0; fi
+    if [ ${#files[@]} -eq 0 ]; then
+        die "input '$key' is the directory '$value', which holds no file"
+    fi
+    die "input '$key' is the directory '$value', which holds more than one candidate file ($(cd "$value" && ls -1 | tr '\n' ' ')); it should hold exactly one${1:+ ending in $*}"
+}
+
+# input_sidecar <json key> <image key> <out file> -- find the JSON sidecar for
+# one series.  Sets SIDECAR_PATH (empty when there is none) and SIDECAR_SOURCE.
+# Called directly, not in $(...), so that both variables survive.
+#
+# Tried in this order:
+#   1. the config key (`dwi_json` / `rdwi_json`) -- how a local run names it;
+#   2. a .json beside the image, with the image's name (dwi.nii.gz -> dwi.json);
+#   3. brainlife's input metadata. brainlife's neuro/dwi datatype has no sidecar
+#      file, so the registration form cannot map one: the sidecar is imported
+#      into the dataset's metadata (its "Metadata/Sidecar" tab) and reaches the
+#      App as the `meta` of that input's entry in `_inputs`.  The entry is the
+#      one whose `keys` -- the config keys mapped to that input -- include the
+#      image key, so the forward and reverse series each get their own; the
+#      input's `id` is accepted as a fallback.  Matching by position would hand
+#      one series the other's PhaseEncodingDirection.
+# The metadata is written to <out file>, so every later consumer reads a file.
+# Both are read by the stage that sources this file, which shellcheck cannot see.
+# shellcheck disable=SC2034
+SIDECAR_PATH=""
+# shellcheck disable=SC2034
+SIDECAR_SOURCE=""
+# shellcheck disable=SC2034
+input_sidecar() {
+    local json_key="$1" image_key="$2" out="$3" path image candidate
+    SIDECAR_PATH=""
+    SIDECAR_SOURCE=""
+
+    path="$(cfg_path "$json_key")"
+    if [ -n "$path" ]; then
+        SIDECAR_PATH="$path"; SIDECAR_SOURCE="config:$json_key"; return 0
+    fi
+
+    image="$(cfg_path "$image_key")"
+    if [ -n "$image" ]; then
+        candidate="${image%.gz}"; candidate="${candidate%.nii}.json"
+        if [ "$candidate" != "$image" ] && [ -f "$candidate" ]; then
+            SIDECAR_PATH="$candidate"; SIDECAR_SOURCE="beside-image"; return 0
+        fi
+    fi
+
+    if jq --arg k "$image_key" '
+            [ (._inputs // [])[]?
+              | select(type == "object")
+              | select(any((.keys // [])[]?; . == $k) or .id == $k)
+              | (.meta? // {})
+              | select(type == "object" and length > 0) ]
+            | first // empty' "$CONFIG" > "$out" 2>/dev/null && [ -s "$out" ]; then
+        SIDECAR_PATH="$out"; SIDECAR_SOURCE="brainlife-meta"; return 0
+    fi
+    rm -f "$out"
+    return 0
 }
 
 require_path() {

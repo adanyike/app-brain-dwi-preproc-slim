@@ -71,6 +71,44 @@ printf '{"mode": "nonsense", "dwi": "dwi.nii.gz"}\n' > "$TMP/subject/config.json
 out="$(run_main_in "$TMP/subject" SKIP_CONTAINER=1)"
 check "an unrecognised mode is refused" "unrecognised mode" "$out"
 
+# ------------------------------------------------------- where results go ----
+# brainlife collects each output from <task dir>/<output ID>/, so a brainlife
+# task (recognised by the keys brainlife writes) writes there; a local run keeps
+# ./output.
+mkdir -p "$TMP/bl/tensor" "$TMP/bl/squad"
+touch "$TMP/bl/tensor/stale.nii.gz" "$TMP/bl/squad/keep"
+printf '{"_app": "x", "_inputs": [], "dwi": "../stage/ds/dwi.nii.gz"}\n' > "$TMP/bl/config.json"
+out="$(run_main_in "$TMP/bl" SKIP_CONTAINER=1)"
+check "a brainlife task writes to the task directory" "outputs: $TMP/bl"$'\n' "$out"$'\n'
+check "the previous attempt's outputs are cleared" "cleared" \
+      "$([ ! -e "$TMP/bl/tensor" ] && echo cleared)"
+check "the other App's output directory is left alone" "kept" \
+      "$([ -e "$TMP/bl/squad/keep" ] && echo kept)"
+check "no ./output on brainlife" "absent" "$([ ! -e "$TMP/bl/output" ] && echo absent)"
+
+printf '{"dwi": "dwi.nii.gz"}\n' > "$TMP/subject/config.json"
+out="$(run_main_in "$TMP/subject" SKIP_CONTAINER=1)"
+check "a local run writes to ./output" "outputs: $TMP/subject/output" "$out"
+
+out="$(run_main_in "$TMP/subject" SKIP_CONTAINER=1 "OUT_DIR=$TMP/elsewhere")"
+check "OUT_DIR in the environment wins" "outputs: $TMP/elsewhere" "$out"
+
+# A directory the run would clear is refused when config.json reads from it,
+# so input data in ./dwi survives a config that looks like brainlife's.
+mkdir -p "$TMP/guard/dwi"
+touch "$TMP/guard/dwi/dwi.nii.gz"
+printf '{"_inputs": [], "dwi": "dwi/dwi.nii.gz"}\n' > "$TMP/guard/config.json"
+out="$(run_main_in "$TMP/guard" SKIP_CONTAINER=1)"
+check "clearing an input directory is refused" "reads an input from it" "$out"
+check "and the input survives" "kept" "$([ -f "$TMP/guard/dwi/dwi.nii.gz" ] && echo kept)"
+
+mkdir -p "$TMP/blgroup/squad" "$TMP/blgroup/tensor"
+printf '{"_tid": 2, "eddyqc": ["a", "b"]}\n' > "$TMP/blgroup/config.json"
+out="$(run_main_in "$TMP/blgroup" SKIP_CONTAINER=1)"
+check "a brainlife group task writes to the task directory" "outputs: $TMP/blgroup"$'\n' "$out"$'\n'
+check "and clears only squad/" "squad-cleared tensor-kept" \
+      "$([ ! -e "$TMP/blgroup/squad" ] && printf squad-cleared) $([ -d "$TMP/blgroup/tensor" ] && printf tensor-kept)"
+
 # The routing must not depend on jq: the container carries it, a cluster head
 # node need not.  Run main with a PATH that has everything it uses but jq.
 NOJQ="$TMP/bin-nojq"

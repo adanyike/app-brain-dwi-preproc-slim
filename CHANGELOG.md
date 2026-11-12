@@ -364,3 +364,37 @@ study-wise eddy QC (SQUAD) across a whole cohort.
   singularity gives a clear error instead of being handed to docker.
 - Unit tests, static checks, a dry run of every stage against a stub toolchain,
   and a synthetic end-to-end smoke test.
+
+### Running it on brainlife
+
+Checked against brainlife's registration form and submit code rather than
+assumed; the App had not been registered when these were found.
+
+- **Outputs go where brainlife collects them.** brainlife archives each output
+  from `<task dir>/<output ID>/` ("Output on root" is deprecated and not
+  offered to new Apps), so in a brainlife task -- recognised by the `_app` /
+  `_tid` / `_inputs` keys brainlife writes into `config.json` -- `main` points
+  `OUT_DIR` at the task directory, and `dwi/`, `mask/`, `tensor/`, `roistats/`,
+  `reg/`, `qc/`, `eddyqc/` and `squad/` are the output IDs to register. Local
+  runs keep `./output/`; `OUT_DIR` overrides either. Before a run `main` clears
+  only its own App's output directories, and refuses to clear one that
+  `config.json` reads an input from.
+- **The sidecars come from brainlife's input metadata.** `neuro/dwi` has no
+  sidecar file, so the form cannot map `dwi_json` / `rdwi_json`; the sidecar is
+  the dataset's metadata and arrives as that input's `_inputs[].meta`. Each
+  series' sidecar is now taken from the config key, else a `.json` beside the
+  image, else the `_inputs` entry whose mapped keys include `dwi` / `rdwi` --
+  by key, never position, so the two series cannot swap phase-encode
+  directions. Without this, stage 0 stopped at "could not determine the
+  phase-encoding direction" on every brainlife task. `prep.json` records which
+  source each series used (`sidecar_source`), and stage 6 publishes the
+  resolved sidecar as `dwi/dwi.json`.
+- **`slspec` and `grouping_variable` accept the directory holding the file.**
+  brainlife has no datatype for a small text file, so both arrive as `raw`
+  inputs, which map to the dataset directory. The one `.txt` (or, for the
+  table, `.tsv`/`.csv`/`.txt`) inside is used; two candidates are refused.
+- **Group subject labels no longer collapse onto the first input.** Matching
+  `_inputs` entries to staged paths used the staging task id, which every
+  dataset in one submission shares; only ids unique to one entry are used now.
+  Entries for other inputs (the grouping table) are skipped, so they no longer
+  shift the positional fallback.
