@@ -1,6 +1,10 @@
 #!/bin/bash
 # Stage 6 -- lay the results out as brainlife datatypes and write product.json.
 #
+# $OUT_DIR is ./output locally and the task directory itself on brainlife,
+# where each directory below is collected as the output whose ID it is named
+# after (see main).
+#
 #   output/dwi/            neuro/dwi     preprocessed DWI + rotated gradients
 #   output/mask/           neuro/mask    final brain mask
 #   output/tensor/         neuro/tensor  tensor + FA/MD/AD/RD/CL/CP/CS
@@ -42,7 +46,10 @@ cp "$BIAS_CORRECTED"  "$OUT_DIR/dwi/dwi.nii.gz"
 cp "$ROTATED_BVECS"   "$OUT_DIR/dwi/dwi.bvecs"
 cp "$MERGED_BVALS"    "$OUT_DIR/dwi/dwi.bvals"
 
-DWI_JSON="$(cfg_path dwi_json)"
+# The sidecar stage 0 resolved -- a config key, a file beside the image, or
+# brainlife's input metadata.  A state.sh from before it was recorded falls
+# back to the config key.
+DWI_JSON="${DWI_JSON:-$(cfg_path dwi_json)}"
 if [ -n "$DWI_JSON" ]; then
     jq --argjson n "$NVOL_TOTAL" \
        '. + {ProcessingPipeline: "brainlife app-brain-dwi-preproc",

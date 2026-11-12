@@ -18,12 +18,20 @@ mkdir -p "$RAW" "$PREP"
 DWI="$(require_path dwi)"
 BVALS="$(require_path bvals)"
 BVECS="$(require_path bvecs)"
-DWI_JSON="$(cfg_path dwi_json)"
 
 RDWI="$(cfg_path rdwi)"
 RBVALS="$(cfg_path rbvals)"
 RBVECS="$(cfg_path rbvecs)"
-RDWI_JSON="$(cfg_path rdwi_json)"
+
+# The sidecars: a config key locally, brainlife's input metadata on brainlife
+# (see input_sidecar).  Whichever answered is recorded in prep.json.
+input_sidecar dwi_json dwi "$PREP/dwi_sidecar.json"
+DWI_JSON="$SIDECAR_PATH"
+DWI_JSON_SOURCE="${SIDECAR_SOURCE:-none}"
+input_sidecar rdwi_json rdwi "$PREP/rdwi_sidecar.json"
+RDWI_JSON="$SIDECAR_PATH"
+RDWI_JSON_SOURCE="${SIDECAR_SOURCE:-none}"
+log "sidecars: dwi from ${DWI_JSON_SOURCE}${DWI_JSON:+ ($DWI_JSON)}, rdwi from ${RDWI_JSON_SOURCE}${RDWI_JSON:+ ($RDWI_JSON)}"
 
 log "forward series: $DWI"
 NVOL_FWD="$(nvols "$DWI")"
@@ -37,7 +45,7 @@ NVOL_REV=0
 # field to estimate, and the output would be geometrically distorted while being
 # named, shaped and summarised exactly like a corrected run -- indistinguishable
 # downstream, and easy to pool across a cohort by accident.
-[ -n "$RDWI" ] || die "no reverse phase-encoded series supplied. This app corrects susceptibility distortion from an opposing phase-encode pair and cannot run without one: map 'rdwi', 'rbvals' and 'rbvecs' (and ideally 'rdwi_json')."
+[ -n "$RDWI" ] || die "no reverse phase-encoded series supplied. This app corrects susceptibility distortion from an opposing phase-encode pair and cannot run without one: map 'rdwi', 'rbvals' and 'rbvecs'."
 [ -n "$RBVALS" ] && [ -n "$RBVECS" ] || \
     die "'rdwi' was given but 'rbvals'/'rbvecs' were not; all three are needed"
 
@@ -72,14 +80,14 @@ PREP_ARGS=(
     --reduce-b0-above "$(cfg reduce_b0_above 8)"
     --outdir "$PREP"
 )
-[ -n "$DWI_JSON" ] && PREP_ARGS+=(--json "$DWI_JSON") || true
+[ -n "$DWI_JSON" ] && PREP_ARGS+=(--json "$DWI_JSON" --json-source "$DWI_JSON_SOURCE") || true
 READOUT="$(cfg_manual readout_time)"
 [ -n "$READOUT" ] && PREP_ARGS+=(--readout-time "$READOUT") || true
 
 if [ -n "$RDWI" ]; then
     PREP_ARGS+=(--rbvals "$RBVALS" --rbvecs "$RBVECS" --rnvols "$NVOL_REV"
                 --rpe-dir "$(cfg_manual rpe_dir)")
-    [ -n "$RDWI_JSON" ] && PREP_ARGS+=(--rjson "$RDWI_JSON") || true
+    [ -n "$RDWI_JSON" ] && PREP_ARGS+=(--rjson "$RDWI_JSON" --rjson-source "$RDWI_JSON_SOURCE") || true
     RREADOUT="$(cfg_manual rreadout_time)"
     [ -n "$RREADOUT" ] && PREP_ARGS+=(--rreadout-time "$RREADOUT") || true
 fi
@@ -100,7 +108,7 @@ if [ -n "$USER_INDEX" ]; then
 fi
 
 # -------------------------------------------------------------- slspec ----
-USER_SLSPEC="$(cfg_path slspec)"
+USER_SLSPEC="$(cfg_file slspec .txt)"
 SLICE_ORDER="$(cfg_manual slice_order)"
 SLSPEC=""
 MB_FACTOR=""
@@ -187,7 +195,7 @@ elif [ -n "$DWI_JSON" ]; then
         warn "could not derive a slspec from $DWI_JSON -- slice-to-volume correction will be disabled"
     fi
 else
-    warn "no dwi_json supplied -- slice-to-volume correction will be disabled"
+    warn "no sidecar for the forward series (no dwi_json, no .json beside the image, no brainlife input metadata) -- slice-to-volume correction will be disabled"
 fi
 
 # --------------------------------------------------- denoise and degibbs ----
@@ -225,6 +233,7 @@ INDEX_FILE="$PREP/index.txt"
 MERGED_BVALS="$PREP/merged.bvals"
 MERGED_BVECS="$PREP/merged.bvecs"
 SLSPEC="$SLSPEC"
+DWI_JSON="$DWI_JSON"
 NVOL_TOTAL=$NVOL_TOTAL
 NVOL_FWD=$NVOL_FWD
 NVOL_REV=$NVOL_REV

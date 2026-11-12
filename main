@@ -18,8 +18,8 @@
 # App's input ('eddyqc', an array of per-subject QC datasets) has nothing in
 # common with the per-subject App's.  The PBS header above sizes the per-subject
 # job: group QC reads QC databases rather than images, so it needs neither the
-# GPU nor the memory, and the group App should be registered with its own
-# (much smaller) resource request.
+# GPU nor the memory -- but brainlife's App form has no resource field, so both
+# Apps get this one header.
 #
 # Environment overrides:
 #   APP_IMAGE        container to run (default below).  Either a docker:// URI
@@ -76,8 +76,45 @@ if [ -f config.json ]; then
 fi
 echo "driver: $DRIVER"
 
-rm -rf output product.json
-mkdir -p output
+# ------------------------------------------------------- where results go ----
+# brainlife collects each output from <task dir>/<output ID>/ -- the form's own
+# hint says so, and "Output on root" is deprecated and unavailable to new Apps.
+# So on brainlife the output directories go in the task directory itself, named
+# after the output IDs the Apps are registered with. Locally they go under
+# ./output, as they always have: a working directory there may well hold the
+# input data in a folder called dwi/, and the clean-up below must never meet it.
+#
+# A brainlife task is recognised by the bookkeeping keys only brainlife writes
+# into config.json (_app, _tid, _inputs). OUT_DIR in the environment wins.
+case "$DRIVER" in
+    run_squad.sh) OUTPUT_IDS="squad" ;;
+    *)            OUTPUT_IDS="dwi mask tensor roistats reg qc eddyqc" ;;
+esac
+if [ -z "${OUT_DIR:-}" ]; then
+    if [ -f config.json ] && grep -qE '"_(app|tid|inputs)"[[:space:]]*:' config.json; then
+        OUT_DIR="$PWD"
+    else
+        OUT_DIR="$PWD/output"
+    fi
+fi
+case "$OUT_DIR" in /*) ;; *) OUT_DIR="$PWD/$OUT_DIR" ;; esac
+OUT_DIR="${OUT_DIR%/}"
+export OUT_DIR
+echo "outputs: $OUT_DIR"
+
+# Clear the previous attempt's results -- only this App's output directories,
+# and never one that config.json reads an input from.
+for name in $OUTPUT_IDS; do
+    target="$OUT_DIR/$name"
+    [ -e "$target" ] || continue
+    if [ -f config.json ] && { grep -qE "\"(\./)?$name/" config.json || grep -qF "\"$target/" config.json; }; then
+        echo "ERROR: $target would be cleared for this run's results, but config.json reads an input from it. Move the input, or set OUT_DIR elsewhere." >&2
+        exit 1
+    fi
+    rm -rf "$target"
+done
+rm -f product.json
+mkdir -p "$OUT_DIR"
 
 # The working directory and the app itself are always visible inside the
 # container.  Anything else -- input data on a different filesystem, say --
@@ -104,6 +141,9 @@ elif command -v singularity >/dev/null 2>&1; then
     GPU_FLAG=""
     if nvidia-smi -L >/dev/null 2>&1; then GPU_FLAG="--nv"; fi
     # GPU_FLAG is empty or a flag word, so it must stay unquoted.
+    # -e starts from a clean environment, so OUT_DIR crosses only with the
+    # runtime's own prefix, like the thread counts above.
+    export SINGULARITYENV_OUT_DIR="$OUT_DIR" APPTAINERENV_OUT_DIR="$OUT_DIR"
     # shellcheck disable=SC2086
     singularity exec $GPU_FLAG -e \
         "${SING_BIND[@]}" --pwd "$PWD" \
@@ -124,6 +164,7 @@ elif command -v docker >/dev/null 2>&1; then
         -e ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS="$NCORES" \
         -e MRTRIX_NTHREADS="$NCORES" \
         -e APP_DIR="$APP_DIR" \
+        -e OUT_DIR="$OUT_DIR" \
         -u "$(id -u):$(id -g)" \
         "${APP_IMAGE#docker://}" "$APP_DIR/$DRIVER"
 else
@@ -134,9 +175,9 @@ fi
 # brainlife treats a non-zero exit as a failed task, so assert on the one file
 # that means this task actually produced its result.
 if [ "$DRIVER" = run_squad.sh ]; then
-    EXPECTED="output/squad/group_db.json"
+    EXPECTED="$OUT_DIR/squad/group_db.json"
 else
-    EXPECTED="output/tensor/fa.nii.gz"
+    EXPECTED="$OUT_DIR/tensor/fa.nii.gz"
 fi
 if [ ! -f "$EXPECTED" ]; then
     echo "ERROR: $EXPECTED was not produced" >&2

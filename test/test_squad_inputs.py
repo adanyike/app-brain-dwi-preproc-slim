@@ -186,6 +186,32 @@ class TestLabels(StagingCase):
         report = self.run_staging(config)
         self.assertEqual(report["chosen"]["subjects"], ["first", "second"])
 
+    def test_a_task_id_shared_by_every_input_does_not_tie_them_all_to_one(self):
+        # brainlife stages every dataset of one submission under the same
+        # staging task (../<task>/<dataset id>), so that id is in every path.
+        # Only the dataset id tells the entries apart.
+        task = "5f0e9999999999999999cccc"
+        first = self.dataset(os.path.join(task, "6a0e1111111111111111aaaa"), qc())
+        second = self.dataset(os.path.join(task, "6a0e2222222222222222bbbb"), qc())
+        config = self.config([first, second], _inputs=[
+            {"task_id": task, "dataset_id": "6a0e2222222222222222bbbb",
+             "meta": {"subject": "second"}},
+            {"task_id": task, "dataset_id": "6a0e1111111111111111aaaa",
+             "meta": {"subject": "first"}}])
+        report = self.run_staging(config)
+        self.assertEqual(report["chosen"]["subjects"], ["first", "second"])
+
+    def test_an_entry_for_another_input_does_not_shift_the_positions(self):
+        # `_inputs` lists every input of the App. The grouping table's entry
+        # comes first here; its config keys say it is not a QC database.
+        folders = [self.dataset("a", qc()), self.dataset("b", qc())]
+        config = self.config(folders, _inputs=[
+            {"keys": ["grouping_variable"], "meta": {"subject": "the-table"}},
+            {"keys": ["eddyqc"], "meta": {"subject": "S1"}},
+            {"keys": ["eddyqc"], "meta": {"subject": "S2"}}])
+        report = self.run_staging(config)
+        self.assertEqual(report["chosen"]["subjects"], ["S1", "S2"])
+
     def test_the_app_s_own_label_wins_over_input_metadata(self):
         folders = [self.dataset("a", qc(), summary={"subject": "sub-recorded"}),
                    self.dataset("b", qc(), summary={"subject": "sub-other"})]
@@ -878,6 +904,28 @@ class TestGroupingVariable(StagingCase):
         report = self.run_staging(self.config(folders, grouping_variable=path))
         self.assertEqual(report["variable"]["encoding"], {"0": "MCG", "1": "UMN"})
         self.assertEqual(self.variable_lines(), ["site", "0", "0", "1"])
+
+    def test_a_raw_dataset_directory_holding_the_table_is_accepted(self):
+        # On brainlife the table arrives as a `raw` input, which maps only to
+        # the dataset directory.
+        folder = os.path.join(self.root, "raw-table")
+        os.makedirs(folder)
+        with open(os.path.join(folder, "participants.tsv"), "w") as fh:
+            fh.write("participant_id\tgroup\nsub-02\t1\nsub-01\t0\n")
+        with open(os.path.join(folder, ".brainlife.json"), "w") as fh:
+            fh.write("{}")
+        self.run_staging(self.config(self.two_subjects(), grouping_variable=folder))
+        self.assertEqual(self.variable_lines(), ["group", "0", "0", "1"])
+
+    def test_a_directory_with_two_tables_is_refused(self):
+        folder = os.path.join(self.root, "raw-two")
+        os.makedirs(folder)
+        for name in ("a.tsv", "b.csv"):
+            with open(os.path.join(folder, name), "w") as fh:
+                fh.write("subject\tgroup\nsub-01\t0\nsub-02\t1\n")
+        report = self.run_staging(
+            self.config(self.two_subjects(), grouping_variable=folder), expect=1)
+        self.assertIn("more than one candidate", report["error"])
 
     def test_a_missing_variable_file_is_named(self):
         report = self.run_staging(

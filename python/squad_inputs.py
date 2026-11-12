@@ -180,6 +180,12 @@ def input_meta(config: dict) -> List[Dict[str, Any]]:
         if not isinstance(entry, dict):
             out.append({"subject": "", "session": "", "tokens": []})
             continue
+        # brainlife lists every input of the App here, not only the QC
+        # databases: an entry whose mapped config keys are all something else
+        # (the grouping table, say) would otherwise shift every position.
+        keys = entry.get("keys")
+        if isinstance(keys, list) and keys and not set(keys) & set(INPUT_KEYS):
+            continue
         meta = entry.get("meta") or {}
         tokens = [str(entry.get(key)) for key in ("task_id", "subdir", "dataset_id", "id")
                   if entry.get(key)]
@@ -188,6 +194,15 @@ def input_meta(config: dict) -> List[Dict[str, Any]]:
             "session": str(meta.get("session") or "").strip(),
             "tokens": [token for token in tokens if len(token) > 8],
         })
+    # A token only identifies an entry if no other entry carries it. Every
+    # dataset staged by one submission shares the staging task's `task_id`, so
+    # that id appears in every path and would tie every path to the first entry.
+    counts: Dict[str, int] = {}
+    for meta in out:
+        for token in set(meta["tokens"]):
+            counts[token] = counts.get(token, 0) + 1
+    for meta in out:
+        meta["tokens"] = [token for token in meta["tokens"] if counts[token] == 1]
     return out
 
 
@@ -641,6 +656,36 @@ def choose(cohorts: Sequence[dict], requested: str, require_homogeneous: bool) -
 
 # ------------------------------------------------------ grouping variable ----
 
+VARIABLE_SUFFIXES = (".tsv", ".csv", ".txt")
+
+
+def resolve_variable_path(path: str) -> str:
+    """The grouping-variable file, given the file or the directory holding it.
+
+    brainlife has no datatype for a small table, so on brainlife the table
+    arrives as a `raw` input, and a raw input maps only to its dataset
+    directory. Inside one, a single .tsv/.csv/.txt wins, else the single visible
+    file; two candidates are refused rather than one picked at random.
+    """
+    if os.path.isfile(path):
+        return path
+    if not os.path.isdir(path):
+        raise StagingError("grouping_variable '%s' does not exist" % path)
+    files = sorted(name for name in os.listdir(path)
+                   if not name.startswith(".") and os.path.isfile(os.path.join(path, name)))
+    tables = [name for name in files if name.lower().endswith(VARIABLE_SUFFIXES)]
+    if len(tables) == 1:
+        return os.path.join(path, tables[0])
+    if not tables and len(files) == 1:
+        return os.path.join(path, files[0])
+    if not files:
+        raise StagingError("grouping_variable '%s' is a directory holding no file" % path)
+    raise StagingError(
+        "grouping_variable '%s' is a directory holding more than one candidate "
+        "table (%s); it should hold exactly one .tsv, .csv or .txt"
+        % (path, ", ".join(tables or files)))
+
+
 def read_variable_table(path: str) -> Tuple[str, Dict[str, str]]:
     """(column name, {subject: value}) from a participants-style CSV/TSV."""
     with open(path, newline="") as fh:
@@ -962,8 +1007,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         variable: Dict[str, Any] = {}
         variable_path = str(config.get("grouping_variable") or "").strip()
         if variable_path:
-            if not os.path.isfile(variable_path):
-                raise StagingError("grouping_variable '%s' does not exist" % variable_path)
+            variable_path = resolve_variable_path(variable_path)
             variable = write_variable_file(
                 variable_path,
                 str(config.get("variable_name") or "").strip(),

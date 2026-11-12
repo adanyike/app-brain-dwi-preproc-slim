@@ -3,7 +3,8 @@
 #
 # Not part of the per-subject pipeline: this runs once for a whole study, from
 # run_squad.sh, against the per-subject eddy QC datasets the pipeline published
-# (output/eddyqc, each holding a qc.json).
+# (output/eddyqc, each holding a qc.json).  Paths below are relative to
+# $OUT_DIR: ./output locally, the task directory on brainlife (see main).
 #
 #   output/squad/group_qc.pdf      the study-wise report
 #   output/squad/group_db.json     the study-wise database
@@ -34,7 +35,7 @@ if ! python3 "$APP_DIR/python/squad_inputs.py" \
     [ -f "$COHORTS" ] && cp "$COHORTS" "$OUT_DIR/squad/cohorts.json" || true
     python3 "$APP_DIR/python/make_group_product.py" \
         --cohorts "$COHORTS" --out "$PWD/product.json" 2>/dev/null || true
-    die "the inputs could not be staged for eddy_squad (see output/squad/cohorts.json)"
+    die "the inputs could not be staged for eddy_squad (see $OUT_DIR/squad/cohorts.json)"
 fi
 
 LIST_FILE="$(jq -r '.list_file // empty' "$COHORTS")"

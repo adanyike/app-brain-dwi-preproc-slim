@@ -36,7 +36,10 @@ be prepared by hand:
   direction and total readout time are read from `PhaseEncodingDirection` and
   `TotalReadoutTime`, falling back through `EffectiveEchoSpacing`, the Siemens
   bandwidth field and the estimated variants. The source used for each is
-  recorded in the output.
+  recorded in the output. On brainlife the sidecar is the dataset's
+  *Metadata/Sidecar*, which brainlife hands the App with each input; nothing
+  needs mapping. Locally, name it with `dwi_json` / `rdwi_json`, or leave a
+  `dwi.json` beside `dwi.nii.gz`.
 * **The slice specification comes from `SliceTiming`** (or Siemens
   `MosaicRefAcqTimes`). Slices are grouped by acquisition time, so the multiband
   factor is measured rather than assumed, and a grouping that does not make
@@ -58,7 +61,7 @@ and an odd dimension simply selects a topup config that does not sub-sample.
 |---|---|---|
 | Diffusion series with its gradient table and JSON sidecar | `neuro/dwi` | yes |
 | Reverse phase-encoded series | `neuro/dwi` | yes |
-| Slice specification (`slspec`) | — | no |
+| Slice specification (`slspec`) | `raw` — a dataset holding one `.txt` | no |
 
 **The reverse phase-encoded series is required.** It is what makes the
 distortion correction possible, and there is no option to proceed without it: an
@@ -238,7 +241,7 @@ per acquisition.
 | Parameter | Default | Meaning |
 |---|---|---|
 | `eddyqc` | — | The per-subject eddy QC datasets. A path to a `qc.json`, to any folder holding one, or a list of either |
-| `grouping_variable` | — | A `participants.tsv`-style table with a subject column and one value column, matched **by subject name**; or a file already in `eddy_squad`'s own format, matched by position |
+| `grouping_variable` | — | A `participants.tsv`-style table with a subject column and one value column, matched **by subject name**; or a file already in `eddy_squad`'s own format, matched by position. On brainlife, an optional `raw` input holding that one `.tsv`, `.csv` or `.txt` |
 | `variable_name` / `variable_is_continuous` | column name / `false` | Label for the variable, and whether to draw scatter plots with a regression fit (continuous) or violin plots per class (categorical) |
 | `update_single_subject_reports` | `true` | Also rewrite each subject's own report with study-wise context |
 | `cohort` | largest | Which group of subjects to report on |
@@ -380,7 +383,9 @@ $EDITOR config.json
 
 `main` selects Singularity, Docker or a local toolchain automatically and passes
 a GPU through when one is present. Results appear in `output/` and
-`product.json`. For a group QC run, start from `config.json.squad.example`
+`product.json`. (On brainlife they are written beside `config.json` instead,
+one directory per output dataset, because that is where brainlife collects
+them; `OUT_DIR` overrides either.) For a group QC run, start from `config.json.squad.example`
 instead; `main` recognises it by its `eddyqc` input.
 
 The container is pulled, not built. Point `APP_IMAGE` at another tag or a local
