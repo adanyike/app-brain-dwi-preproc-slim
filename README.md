@@ -50,7 +50,6 @@ structure slice-to-volume correction depends on.
 |---|---|---|
 | Diffusion series, with gradients and sidecar | `neuro/dwi` | yes |
 | Reverse phase-encoded series | `neuro/dwi` | yes |
-| Slice specification (`slspec`) | `raw` — a dataset holding one `.txt` | no |
 
 **The reverse series is required.** Without it there is no distortion
 correction. An uncorrected result would look exactly like a corrected one, and
@@ -60,9 +59,13 @@ different app.
 For slice-to-volume correction the app needs the slice order. It takes the
 first of:
 
-1. **An `slspec` file** — one row per excitation, listing the 0-based slices
-   acquired together. `templates/` has an example for an 84-slice, multiband-4
-   protocol. A file that doesn't match your data is refused.
+1. **An `slspec`** — one row per excitation, listing the 0-based slices
+   acquired together. On brainlife, paste the rows into `slspec_text`; locally,
+   point `slspec` at a file (or use `slspec_text` too). `templates/` has an
+   example for an 84-slice, multiband-4 protocol. One that doesn't match your
+   data is refused. This is the reliable route for Philips data without
+   `SliceTiming`: the rows are the same for every subject scanned with one
+   protocol.
 2. **A declared `slice_order`**, for sidecars without timings (some Philips
    exports). If the sidecar does have `SliceTiming` and disagrees, the run stops.
 3. **`SliceTiming` in the sidecar** — the usual case.
@@ -241,6 +244,7 @@ Only needed when the sidecars are incomplete or wrong.
 | Parameter | Default | Meaning |
 |---|---|---|
 | `denoise` / `degibbs` | `true` | MP-PCA denoising / Gibbs ringing removal |
+| `slspec_text` | — | An `slspec` pasted as text: one row per line, slices separated by spaces or commas (or rows by `;` on one line). Locally, `slspec` takes a file path instead; give one or the other |
 | `slice_order` | `auto` | `auto` uses `SliceTiming`. `ascending`, `descending`, `interleaved`, `rev_interleaved`, `philips_default` or `step` declare the order instead |
 | `multiband` / `slice_packages` / `slice_step` | from the sidecar, else `1` / `1` / — | Protocol details for a declared `slice_order` |
 

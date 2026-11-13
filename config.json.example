@@ -19,6 +19,7 @@
   "degibbs": true,
   "acqp": "",
   "index": "",
+  "slspec_text": "",
   "slice_order": "auto",
   "multiband": 1,
   "slice_packages": 1,

@@ -401,3 +401,10 @@ assumed; the App had not been registered when these were found.
 - **`dtifit_shell` defaults to `lowest` even when the key is absent.** The
   documented default and `config.json.example` said `lowest`, but a config
   without the key fell back to `1500`, and failed on data with no b=1500 shell.
+- **An slspec can be pasted as text (`slspec_text`).** brainlife has no
+  datatype for a small text file, so the `slspec` input needed a `raw` upload
+  with a tag. Instead, the rows go into a multi-line text box: one row per
+  line, slices separated by spaces or commas, or rows by `;` on one line. The
+  text is checked exactly like a supplied file. Locally, `slspec` still takes a
+  file path; giving both is refused. This is the route for Philips data, whose
+  sidecars often carry no `SliceTiming`.

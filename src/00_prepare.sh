@@ -109,12 +109,27 @@ fi
 
 # -------------------------------------------------------------- slspec ----
 USER_SLSPEC="$(cfg_file slspec .txt)"
+SLSPEC_ORIGIN="the supplied slspec file"
+
+# The same specification pasted as text -- how brainlife users give it, since
+# brainlife has no datatype for a small text file. One row per excitation, one
+# line per row; slices may be separated by spaces or commas, and rows by ';'
+# for anyone typing it on one line. Carriage returns from a Windows clipboard
+# are dropped. Written to a file, it is then checked exactly like one.
+SLSPEC_TEXT="$(cfg slspec_text "")"
+if [ -n "$(printf '%s' "$SLSPEC_TEXT" | tr -d '[:space:]')" ]; then
+    [ -z "$USER_SLSPEC" ] || \
+        die "both 'slspec' and 'slspec_text' are set. Give the slice specification one way, not both."
+    printf '%s\n' "$SLSPEC_TEXT" | tr -d '\r' | tr ';,' '\n ' > "$PREP/slspec_pasted.txt"
+    USER_SLSPEC="$PREP/slspec_pasted.txt"
+    SLSPEC_ORIGIN="the slspec pasted into slspec_text"
+fi
 SLICE_ORDER="$(cfg_manual slice_order)"
 SLSPEC=""
 MB_FACTOR=""
 
 if [ -n "$USER_SLSPEC" ]; then
-    log "using the supplied slspec file"
+    log "using $SLSPEC_ORIGIN"
     # A supplied slspec is taken entirely on trust, and the easy mistake is to
     # reuse one from a different protocol -- eddy would then model the slice
     # timing of an acquisition this is not.  A derived slspec is checked against
@@ -138,7 +153,7 @@ if [ -n "$USER_SLSPEC" ]; then
             if (bad) exit 1
             if (total != n) { printf "covers %d slice(s) but the data has %d\n", total, n; exit 1 }
         }' "$USER_SLSPEC")" || \
-        die "the supplied slspec does not describe this acquisition ($NSLICE slices): $SLSPEC_PROBLEM"
+        die "$SLSPEC_ORIGIN does not describe this acquisition ($NSLICE slices): $SLSPEC_PROBLEM"
     cp "$USER_SLSPEC" "$PREP/slspec.txt"
     SLSPEC="$PREP/slspec.txt"
     MB_FACTOR="$(awk 'NF{print NF; exit}' "$SLSPEC")"
