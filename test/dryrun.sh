@@ -412,6 +412,64 @@ rm -rf "$SCEN4/work"
 check "two candidates are refused" test $? -ne 0
 check "and the error says why" grep -q "more than one candidate" "$SCEN4/log2.txt"
 
+# brainlife users paste the slspec into a multi-line text box instead: the same
+# rows, arriving as a string with real newlines.
+printf '\n--- an slspec pasted into slspec_text ---\n'
+SCEN5="$ROOT/15b-slspec-text"
+cp -r "$SCEN" "$SCEN5"
+rm -rf "$SCEN5/work" "$SCEN5/output"
+jq --arg t "$(printf '%s\n' "0 6" "2 8" "4 10" "1 7" "3 9" "5 11")" \
+    '.slspec_text = $t' "$SCEN/config.json" > "$SCEN5/config.json"
+( cd "$SCEN5" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" ) \
+    > "$SCEN5/log.txt" 2>&1
+check "pipeline exits 0" test $? -eq 0
+check "the pasted text is used" grep -q "using the slspec pasted into slspec_text" "$SCEN5/log.txt"
+check "slspec passed to eddy" bash -c '
+    grep -q -- "--slspec=" "'"$SCEN5"'/work/eddy/eddy_corrected.eddy_command_txt"'
+check "slice-to-volume enabled" bash -c '
+    grep -q -- "--mporder=6" "'"$SCEN5"'/work/eddy/eddy_corrected.eddy_command_txt"'
+check "what was published is what was pasted" bash -c '
+    [ "$(tr -s " " < "'"$SCEN5"'/output/qc/slspec.txt")" = "$(printf "%s\n" "0 6" "2 8" "4 10" "1 7" "3 9" "5 11")" ]'
+
+# Typed on one line: rows separated by ';', slices by commas, a Windows line end.
+SCEN6="$ROOT/15c-slspec-text-oneline"
+cp -r "$SCEN" "$SCEN6"
+rm -rf "$SCEN6/work" "$SCEN6/output"
+jq --arg t "$(printf '0,6; 2,8; 4,10; 1,7; 3,9; 5,11\r')" \
+    '.slspec_text = $t' "$SCEN/config.json" > "$SCEN6/config.json"
+( cd "$SCEN6" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" --to 0 ) \
+    > "$SCEN6/log.txt" 2>&1
+check "one-line form accepted" test $? -eq 0
+check "and read as six rows of two" bash -c '
+    [ "$(grep -c "[0-9]" "'"$SCEN6"'/work/prep/slspec.txt")" = 6 ] &&
+    [ "$(awk "NF{print NF}" "'"$SCEN6"'/work/prep/slspec.txt" | sort -u)" = 2 ]'
+
+# Pasted text that does not describe the data is refused like a bad file.
+SCEN7="$ROOT/15d-slspec-text-wrong"
+cp -r "$SCEN" "$SCEN7"
+rm -rf "$SCEN7/work" "$SCEN7/output"
+jq '.slspec_text = "0 6\n2 8\n4 10"' "$SCEN/config.json" > "$SCEN7/config.json"
+( cd "$SCEN7" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" --to 0 ) \
+    > "$SCEN7/log.txt" 2>&1
+check "an incomplete paste is refused" test $? -ne 0
+check "and the error names the pasted text" \
+    grep -q "the slspec pasted into slspec_text does not describe this acquisition" "$SCEN7/log.txt"
+
+# A file and pasted text together are refused rather than one silently winning.
+jq --arg s "$SCEN4/raw/slspec.txt" '.slspec = $s' "$SCEN5/config.json" > "$SCEN7/config.json"
+rm -rf "$SCEN7/work"
+( cd "$SCEN7" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" --to 0 ) \
+    > "$SCEN7/log2.txt" 2>&1
+check "slspec and slspec_text together are refused" test $? -ne 0
+check "and the error says to pick one" grep -q "both 'slspec' and 'slspec_text' are set" "$SCEN7/log2.txt"
+
+# Whitespace alone counts as not set: an untouched multi-line box can hold it.
+jq '.slspec_text = "  \n "' "$SCEN/config.json" > "$SCEN7/config.json"
+rm -rf "$SCEN7/work"
+( cd "$SCEN7" && PATH="$ROOT/bin-gpu:$PATH" APP_DIR="$APP" bash "$APP/run.sh" --to 0 ) \
+    > "$SCEN7/log3.txt" 2>&1
+check "a blank text box is ignored" test $? -eq 0
+
 # --- a slspec from a different protocol is refused, not handed to eddy ---
 printf '\n--- a slspec from another protocol is refused ---\n'
 SCEN3="$ROOT/15b-wrong-slspec"
