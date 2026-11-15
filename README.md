@@ -19,10 +19,10 @@ correction ran, and the quality check on both brain masks.
 
 | Stage | Step | Tools |
 |---|---|---|
-| 0 | Merge the phase-encode pair; denoise; remove Gibbs ringing; derive the acquisition parameters and slice timing from the sidecars | MRtrix3 |
-| 1 | Estimate the susceptibility field from opposing-phase b=0 volumes; brain-extract | FSL `topup`, `bet` |
-| 2 | Correct eddy currents, motion and slice-to-volume motion, replacing outlier slices | FSL `eddy_cuda` |
-| 3 | Correct the bias field; pick a shell and fit the tensor; derive RD, AD, colour FA and shape measures | MRtrix3, ANTs, FSL `dtifit` |
+| 0 | Merge the phase-encode pair; denoise; remove Gibbs ringing; derive the acquisition parameters and slice timing from the sidecars | MRtrix3, FSL |
+| 1 | Estimate the susceptibility field from opposing-phase b=0 volumes; brain-extract | FSL |
+| 2 | Correct eddy currents, motion and slice-to-volume motion, replacing outlier slices | FSL |
+| 3 | Correct the bias field; pick a shell and fit the tensor; derive RD, AD, colour FA and shape measures | MRtrix3, ANTs, FSL |
 | 4 | Register the JHU FA template to the subject's FA and bring the atlas labels into native space | ANTs |
 | 5 | Summarise each metric in each of the 50 ROIs | — |
 | 6 | Publish the datasets, the QC bundle and `product.json` | — |
