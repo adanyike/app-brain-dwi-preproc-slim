@@ -73,6 +73,17 @@ first of:
 With none of these, the app still runs, corrects motion volume by volume only,
 and says so in the summary.
 
+**Philips data.** Philips sidecars often lack two things the app needs, and
+each takes one setting:
+
+* **No `SliceTiming`:** paste the protocol's slice order into `slspec_text`.
+  It's the same for every subject scanned with one protocol.
+* **`PhaseEncodingAxis` without a sign:** set `pe_dir` and `rpe_dir`, e.g.
+  `j-` for AP and `j` for PA, and keep them the same for every subject.
+  Without them the run stops at the start rather than guess the sign.
+
+The readout time is read from `dcm2niix`'s estimates, so it needs nothing.
+
 ## Outputs
 
 | Directory | Datatype | Contents |
